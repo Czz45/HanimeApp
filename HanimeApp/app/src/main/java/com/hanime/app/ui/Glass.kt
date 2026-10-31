@@ -34,21 +34,15 @@ import com.kyant.backdrop.effects.vibrancy
 /**
  * Whether this device can afford real backdrop refraction.
  *
- * `lens()` needs `RenderEffect` (API 31) and the emulator's software GPU aborts
- * inside RenderNode recording, so both fall back to a painted frosted surface.
- * The fallback is a designed state, not a bug: it keeps the same geometry,
- * tint and hairline border, only without the live blur.
+ * Disabled everywhere: `drawBackdrop` records the surrounding content from inside
+ * the same subtree it is recorded into, and on a GPU render thread that recursion
+ * builds an unbounded display list until hwui blows its stack (SIGSEGV in
+ * RenderNode::prepareTreeImpl). A device-independent capability check cannot
+ * predict it, so the live path stays off and every surface uses the painted frost
+ * below, which is what all shipped screenshots were taken from.
  */
 object Glass {
-    val live: Boolean = run {
-        val hw = Build.HARDWARE.lowercase()
-        val fp = Build.FINGERPRINT.lowercase()
-        val model = Build.MODEL.lowercase()
-        val softwareGpu = hw.contains("goldfish") || hw.contains("ranchu") ||
-            fp.contains("generic") || fp.contains("emulator") || model.contains("sdk_gphone") ||
-            model.contains("emulator")
-        !softwareGpu && Build.VERSION.SDK_INT >= 31
-    }
+    const val live: Boolean = false
 }
 
 /** The one glass recipe used everywhere. */
