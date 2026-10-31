@@ -60,12 +60,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hanime.app.core.Card
 import com.hanime.app.core.DownloadTask
 import com.hanime.app.ui.AppViewModel
+import com.hanime.app.ui.CollectionScreen
 import com.hanime.app.ui.DetailSheet
 import com.hanime.app.ui.DownloadsScreen
 import com.hanime.app.ui.ErrorPill
 import com.hanime.app.ui.HomeScreen
 import com.hanime.app.ui.PlayerScreen
 import com.hanime.app.ui.Route
+import com.hanime.app.ui.SearchScreen
 import com.hanime.app.ui.SettingsScreen
 import com.hanime.app.ui.glass
 import com.hanime.app.ui.rememberGlassBackdrop
@@ -128,6 +130,11 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             backdrop = backdrop,
                             watched = if (settings.hideWatched) emptySet() else watched,
                             topInset = topInset,
+                            hideWatched = settings.hideWatched,
+                            onToggleHideWatched = {
+                                vm.saveSettings { it.copy(hideWatched = !it.hideWatched) }
+                            },
+                            onOpenSearch = { vm.openSearch() },
                             onOpen = { c: Card -> vm.openDetail(c.id, c) },
                         )
 
@@ -177,8 +184,45 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             preferredQuality = settings.preferredQuality,
                             autoPlay = settings.autoPlay,
                             onBack = { vm.closeOverlay() },
-                            onPlay = { d, s -> vm.play(s) },
                             onOpenRelated = { c -> vm.openDetail(c.id, c) },
+                            onOpenCollection = { id, title -> vm.openCollection(id, title) },
+                            onFullscreen = { s -> vm.playFullscreen(s) },
+                        )
+                    }
+                }
+
+                // Search and collection are full pages, so they sit above the tabs
+                // instead of inside the overlay slot the sheet uses.
+                AnimatedVisibility(
+                    visible = vm.route is Route.Search,
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(240)) { it / 8 },
+                    exit = fadeOut(tween(140)),
+                ) {
+                    if (vm.route is Route.Search) {
+                        SearchScreen(
+                            vm = vm,
+                            backdrop = backdrop,
+                            watched = watched,
+                            topInset = topInset,
+                            onOpen = { c -> vm.openDetail(c.id, c) },
+                            onBack = { vm.closeOverlay() },
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = vm.route is Route.Collection,
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(240)) { it / 8 },
+                    exit = fadeOut(tween(140)),
+                ) {
+                    if (vm.route is Route.Collection) {
+                        CollectionScreen(
+                            vm = vm,
+                            backdrop = backdrop,
+                            watched = watched,
+                            topInset = topInset,
+                            onOpen = { c -> vm.openDetail(c.id, c) },
+                            onBack = { vm.closeOverlay() },
                         )
                     }
                 }

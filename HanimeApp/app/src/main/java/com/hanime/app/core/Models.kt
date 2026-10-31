@@ -38,6 +38,9 @@ data class Detail(
     val desc: String = "",
     val sources: List<Source> = emptyList(),
     val related: List<Card> = emptyList(),
+    /** Playlist (collection) this upload belongs to; 0 when standalone. */
+    val listId: Long = 0,
+    val listTitle: String = "",
 ) {
     fun durationText(): String {
         if (duration <= 0) return ""
@@ -53,6 +56,20 @@ data class ListPage(
     val page: Int,
     val maxPage: Int,
     val hasNext: Boolean,
+)
+
+/** One checkbox in the tag filter. [value] is what the site expects on the wire. */
+data class Tag(val value: String, val label: String)
+
+data class TagGroup(val name: String, val tags: List<Tag>)
+
+/** A collection page (`/playlist?list=`). */
+data class Playlist(
+    val id: Long,
+    val title: String = "",
+    val author: String = "",
+    val count: Int = 0,
+    val items: List<Card> = emptyList(),
 )
 
 data class DownloadTask(

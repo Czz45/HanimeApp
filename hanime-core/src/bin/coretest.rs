@@ -88,6 +88,85 @@ fn main() {
                 Err(e) => println!("ERR {e}"),
             }
         }
+        "rel" => {
+            // Related videos + playlist membership for a saved watch page.
+            let path = args.get(1).cloned().unwrap_or_default();
+            let id: i64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let html = std::fs::read_to_string(&path).unwrap_or_default();
+            match hanime_core::html::parse_watch(&html, id) {
+                Ok(d) => {
+                    println!(
+                        "related {} list_id {} list_title {:?}",
+                        d.related.len(),
+                        d.list_id,
+                        d.list_title
+                    );
+                    for c in d.related.iter().take(5) {
+                        println!("  rel {} wide={} {}", c.id, c.wide, c.title);
+                    }
+                }
+                Err(e) => println!("ERR {e}"),
+            }
+        }
+        "pl" => {
+            // Parse a saved `/playlist?list=` page.
+            let path = args.get(1).cloned().unwrap_or_default();
+            let id: i64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let html = std::fs::read_to_string(&path).unwrap_or_default();
+            match hanime_core::html::parse_playlist(&html, id) {
+                Ok(p) => {
+                    println!("title {:?} author {:?} count {}", p.title, p.author, p.count);
+                    for c in p.items.iter().take(8) {
+                        println!("  {} wide={} {} | {}", c.id, c.wide, c.title, c.dur);
+                    }
+                }
+                Err(e) => println!("ERR {e}"),
+            }
+        }
+        "tags" => {
+            let groups = hanime_core::tags::tag_groups();
+            let total: usize = groups.iter().map(|g| g.tags.len()).sum();
+            println!("groups {} tags {}", groups.len(), total);
+            for g in &groups {
+                println!("  {} -> {}", g.name, g.tags.len());
+            }
+        }
+        "url" => {
+            // Print the URL the search sheet would request, to eyeball encoding.
+            // argv: url <query> <genre> <sort> <date> <duration> <broad> [tags...]
+            let tags: Vec<String> = args.iter().skip(7).cloned().collect();
+            println!(
+                "{}",
+                hanime_core::url_for_search(
+                    args.get(1).map(|s| s.as_str()).unwrap_or(""),
+                    args.get(2).map(|s| s.as_str()).unwrap_or(""),
+                    args.get(3).map(|s| s.as_str()).unwrap_or(""),
+                    args.get(4).map(|s| s.as_str()).unwrap_or(""),
+                    args.get(5).map(|s| s.as_str()).unwrap_or(""),
+                    &tags,
+                    args.get(6).map(|s| s == "1").unwrap_or(false),
+                    1,
+                )
+            );
+        }
+        "srch" => {
+            // Live filtered search: srch <query> <genre> <sort> <date> <duration> <broad> [tags...]
+            let tags: Vec<String> = args.iter().skip(7).cloned().collect();
+            let out = hanime_core::fetch_search_filtered(
+                args.get(1).map(|s| s.as_str()).unwrap_or(""),
+                args.get(2).map(|s| s.as_str()).unwrap_or(""),
+                args.get(3).map(|s| s.as_str()).unwrap_or(""),
+                args.get(4).map(|s| s.as_str()).unwrap_or(""),
+                args.get(5).map(|s| s.as_str()).unwrap_or(""),
+                &tags,
+                args.get(6).map(|s| s == "1").unwrap_or(false),
+                1,
+            );
+            match out {
+                Ok(json) => println!("{}", &json[..json.len().min(500)]),
+                Err(e) => println!("ERR {e}"),
+            }
+        }
         other => println!("unknown mode {other}"),
     }
 }

@@ -126,8 +126,21 @@ fn find_first<F: Fn(NodeHandle, &Parser) -> bool>(
     dom.query_selector("*").and_then(|mut it| it.find(|h| pred(*h, parser)))
 }
 
-pub fn video_id_from_href(href: &str) -> Option<i64> {
-    let idx = href.find("/watch?v=")?;
+/// Byte-range containment test: `inner` sits inside `outer`'s source span.
+///
+/// `tl` has no ancestor walk that is ergonomic here (NodeHandle has no parent
+/// pointer), so containment is answered from the offsets the parser recorded.
+fn is_descendant(_dom: &VDom, inner: NodeHandle, outer: NodeHandle) -> bool {
+    let p = _dom.parser();
+    let a = inner.get(p).and_then(|n| n.as_tag().map(|t| t.boundaries(p)));
+    let b = outer.get(p).and_then(|n| n.as_tag().map(|t| t.boundaries(p)));
+    match (a, b) {
+        (Some((is_, ie)), Some((os, oe))) => is_ >= os && ie <= oe,
+        _ => false,
+    }
+}
+
+pub fn video_id_from_href(href: &str) -> Option<i64> {    let idx = href.find("/watch?v=")?;
     let rest = &href[idx + 9..];
     let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     num.parse().ok()
@@ -141,18 +154,24 @@ fn img_src(parser: &Parser, h: NodeHandle) -> String {
 
 fn parse_rich_card(dom: &VDom, container: NodeHandle) -> Option<Card> {
     let parser = dom.parser();
+    // Walk down a bounded number of levels for the watch anchor: the home rows
+    // keep it two levels down, the playlist rows three (`.video-thumb-container`
+    // > `.thumb-container` > `a`), so a fixed two-level scan silently yields
+    // nothing on collection pages.
     let mut link: Option<NodeHandle> = None;
-    for c in children(parser, container) {
-        for gc in children(parser, c) {
-            if let Some(href) = attr(parser, gc, "href") {
-                if href.contains("/watch?v=") {
-                    link = Some(gc);
-                    break;
-                }
+    let mut frontier: Vec<(NodeHandle, u32)> = vec![(container, 0)];
+    while let Some((h, depth)) = frontier.pop() {
+        if let Some(href) = attr(parser, h, "href") {
+            if href.contains("/watch?v=") {
+                link = Some(h);
+                break;
             }
         }
-        if link.is_some() {
-            break;
+        if depth >= 4 {
+            continue;
+        }
+        for c in children(parser, h) {
+            frontier.push((c, depth + 1));
         }
     }
     let link = link?;
@@ -202,15 +221,29 @@ fn parse_rich_card(dom: &VDom, container: NodeHandle) -> Option<Card> {
             stack.push(c);
         }
     }
-    // Author links live in `.subtitle` as `<a href=".../search?query=">`.
-    if let Some(sub) = find_first(dom, |h, p| has_class(p, h, "subtitle")) {
-        for c in children(parser, sub) {
-            if let Some(href) = attr(parser, c, "href") {
-                if href.contains("/search?query=") {
-                    card.author = text(parser, c);
-                    break;
-                }
+    // Author links live in `.subtitle` as `<a href=".../search?query=">`. The
+    // playlist rows put them in `.meta-author` instead, so try both, scoped to
+    // this card rather than the first match on the page.
+    let author_hit = find_first(dom, |h, p| {
+        (has_class(p, h, "subtitle") || has_class(p, h, "meta-author"))
+            && is_descendant(dom, h, container)
+    });
+    if let Some(scope) = author_hit {
+        for c in find_all(dom, |h, p| {
+            attr(p, h, "href").is_some_and(|v| v.contains("/search?query="))
+        }) {
+            if is_descendant(dom, c, scope) {
+                card.author = text(parser, c);
+                break;
             }
+        }
+    }
+    // `.video-title > a` is the playlist/home-row title when `title=` is absent.
+    if card.title.is_empty() {
+        if let Some(h) = find_first(dom, |h, p| {
+            has_class(p, h, "video-title") && is_descendant(dom, h, container)
+        }) {
+            card.title = text(parser, h);
         }
     }
     if card.title.is_empty() {
@@ -387,8 +420,52 @@ pub fn parse_list(html: &str, page: u32) -> Result<ListPage, String> {
     })
 }
 
-fn meta_content(dom: &VDom, property: &str) -> String {
+/// `/playlist?list=<id>` — the collection page.
+///
+/// Rows are `div.playlist-item-row` holding the usual rich card markup, so the
+/// per-card parsing is shared with the home rows; only the header differs.
+pub fn parse_playlist(html: &str, id: i64) -> Result<Playlist, String> {
+    let dom = tl::parse(html, tl::ParserOptions::default()).map_err(|e| e.to_string())?;
     let parser = dom.parser();
+
+    let mut pl = Playlist {
+        id,
+        ..Default::default()
+    };
+
+    if let Some(h) = find_first(&dom, |h, p| has_class(p, h, "playlist-title")) {
+        pl.title = text(parser, h);
+    }
+    if let Some(h) = find_first(&dom, |h, p| has_class(p, h, "playlist-author-info")) {
+        // "由 <a>author</a> 建立" — the anchor carries just the name.
+        for c in find_all(&dom, |h, p| {
+            attr(p, h, "href").is_some_and(|v| v.contains("/user/"))
+        }) {
+            if is_descendant(&dom, c, h) {
+                pl.author = text(parser, c);
+                break;
+            }
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for c in find_all(&dom, |h, p| is_rich_card(p, h)) {
+        if let Some(mut card) = parse_rich_card(&dom, c) {
+            card.wide = card.cover.contains("/image/thumbnail/") || card.cover.is_empty();
+            if seen.insert(card.id) {
+                pl.items.push(card);
+            }
+        }
+    }
+    pl.count = pl.items.len() as u32;
+
+    if pl.items.is_empty() {
+        return Err("no playlist items parsed".into());
+    }
+    Ok(pl)
+}
+
+fn meta_content(dom: &VDom, property: &str) -> String {    let parser = dom.parser();
     find_first(dom, |h, p| {
         let is_meta = h
             .get(p)
@@ -571,16 +648,78 @@ pub fn parse_watch(html: &str, id: i64) -> Result<Detail, String> {
         .take(24)
         .collect();
 
-    // Related videos reuse the rich horizontal card markup.
+    // Related videos only exist inside `#related-tabcontent`. Scanning the whole
+    // page used to pick up the playlist sidebar, which renders the very same
+    // rich cards for the sibling episodes.
     let mut related = Vec::new();
-    for c in find_all(&dom, |h, p| is_rich_card(p, h)) {
-        if let Some(card) = parse_rich_card(&dom, c) {
-            if card.id != id && related.len() < 24 {
+    if let Some(scope) = find_first(&dom, |h, p| {
+        attr(p, h, "id").as_deref() == Some("related-tabcontent")
+    }) {
+        // The cards here are the compact variant: `.video-card-inner` with a
+        // `.home-rows-videos-title` child, wrapped in an anchor whose href is the
+        // plain watch URL.
+        for c in find_all(&dom, |h, p| has_class(p, h, "video-card-inner")) {
+            if !is_descendant(&dom, c, scope) {
+                continue;
+            }
+            let mut card = Card::default();
+            let mut stack: Vec<NodeHandle> = children(parser, c);
+            while let Some(h) = stack.pop() {
+                if has_class(parser, h, "home-rows-videos-title") {
+                    card.title = text(parser, h);
+                } else if let Some(src) = attr(parser, h, "src") {
+                    if src.contains("/image/cover/") || src.contains("/image/thumbnail/") {
+                        card.wide = src.contains("/image/thumbnail/");
+                        card.cover = src.to_string();
+                    }
+                }
+                for gc in children(parser, h) {
+                    stack.push(gc);
+                }
+            }
+            // Pair the card with its enclosing anchor.
+            let bounds = c
+                .get(parser)
+                .and_then(|n| n.as_tag().map(|t| t.boundaries(parser)));
+            if let Some((cs, ce)) = bounds {
+                for a in find_all(&dom, |h, p| {
+                    attr(p, h, "href").is_some_and(|v| v.contains("/watch?v="))
+                }) {
+                    let ab = a
+                        .get(parser)
+                        .and_then(|n| n.as_tag().map(|t| t.boundaries(parser)));
+                    if let Some((as_, ae)) = ab {
+                        if as_ <= cs && ae >= ce {
+                            if let Some(href) = attr(parser, a, "href") {
+                                if let Some(vid) = video_id_from_href(&href) {
+                                    card.id = vid;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if card.id != 0 && card.id != id && related.len() < 24 {
                 related.push(card);
             }
         }
     }
     d.related = related;
+
+    // Playlist membership: the sidebar renders `playlist?list=<id>` next to the
+    // collection title.
+    if let Some(a) = find_first(&dom, |h, p| {
+        attr(p, h, "href").is_some_and(|v| v.contains("playlist?list="))
+    }) {
+        if let Some(href) = attr(parser, a, "href") {
+            if let Some(rest) = href.split("playlist?list=").nth(1) {
+                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                d.list_id = num.parse().unwrap_or(0);
+                d.list_title = text(parser, a);
+            }
+        }
+    }
 
     if d.sources.is_empty() {
         return Err("no video source found".into());

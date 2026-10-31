@@ -122,6 +122,39 @@ object Json {
             desc = optString(o, "desc"),
             sources = sources,
             related = related,
+            listId = optLong(o, "list_id"),
+            listTitle = optString(o, "list_title"),
+        )
+    }
+
+    fun tagGroups(raw: String): List<TagGroup> {
+        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+        val out = ArrayList<TagGroup>(arr.length())
+        for (i in 0 until arr.length()) {
+            val g = arr.optJSONObject(i) ?: continue
+            val tArr = g.optJSONArray("tags") ?: JSONArray()
+            val tags = ArrayList<Tag>(tArr.length())
+            for (j in 0 until tArr.length()) {
+                val t = tArr.optJSONObject(j) ?: continue
+                tags.add(Tag(optString(t, "value"), optString(t, "label")))
+            }
+            out.add(TagGroup(optString(g, "name"), tags))
+        }
+        return out
+    }
+
+    fun playlist(raw: String): Playlist = parse(raw) { o ->
+        val arr = o.optJSONArray("items") ?: JSONArray()
+        val cards = ArrayList<Card>(arr.length())
+        for (i in 0 until arr.length()) {
+            arr.optJSONObject(i)?.let { cards.add(card(it)) }
+        }
+        Playlist(
+            id = optLong(o, "id"),
+            title = optString(o, "title"),
+            author = optString(o, "author"),
+            count = o.optInt("count", cards.size),
+            items = cards,
         )
     }
 

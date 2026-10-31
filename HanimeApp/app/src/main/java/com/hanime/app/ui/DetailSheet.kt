@@ -24,8 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -70,24 +72,23 @@ fun DetailSheet(
     preferredQuality: Int,
     autoPlay: Boolean,
     onBack: () -> Unit,
-    onPlay: (Detail, Source) -> Unit,
     onOpenRelated: (Card) -> Unit,
+    onOpenCollection: (Long, String) -> Unit,
+    onFullscreen: (Source?) -> Unit,
 ) {
     val scroll = rememberScrollState()
-    // Auto play honours the user's preferred quality; it fires once per detail id so
-    // returning from the player does not immediately re-enter it.
-    var autoPlayedFor by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(detail?.id, autoPlay) {
-        val d = detail ?: return@LaunchedEffect
-        if (!autoPlay || autoPlayedFor == d.id) return@LaunchedEffect
-        val pick = d.sources.sortedByDescending { it.quality }
-            .firstOrNull { it.quality == bestQuality(d.sources, preferredQuality) }
-            ?: return@LaunchedEffect
-        autoPlayedFor = d.id
-        onPlay(d, pick)
-    }
     val poster = detail?.poster?.ifBlank { detail.cover } ?: seed?.cover.orEmpty()
     val title = detail?.title ?: seed?.title.orEmpty()
+
+    // Auto play honours the user's preferred quality. The inline player is now
+    // always mounted once a detail resolves, so this only has to make sure the
+    // right quality is the selected one — no navigation involved.
+    LaunchedEffect(detail?.id, autoPlay) {
+        val d = detail ?: return@LaunchedEffect
+        if (!autoPlay) return@LaunchedEffect
+        val pick = d.sources.minByOrNull { kotlin.math.abs(it.quality - preferredQuality) }
+        if (pick != null && vm.inlineSource?.url != pick.url) vm.playInline(pick)
+    }
 
     // Opaque root: the sheet floats above the tab content, which must not bleed
     // through while the hero image and page scroll.
@@ -102,29 +103,43 @@ fun DetailSheet(
                 .verticalScroll(scroll)
                 .padding(bottom = 120.dp),
         ) {
-            // ---- hero ------------------------------------------------------
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(260.dp)
-            ) {
-                AsyncImage(
-                    model = poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            // ---- hero / inline player --------------------------------------
+            // The poster yields to the player as soon as a source is selected: the
+            // user asked to watch here, not to be sent to another screen.
+            val inline = vm.inlineSource
+            if (detail != null && inline != null) {
+                Column(Modifier.padding(top = topInset.dp + 54.dp, start = 14.dp, end = 14.dp)) {
+                    InlinePlayer(
+                        detail = detail,
+                        source = inline,
+                        onFullscreen = { onFullscreen(inline) },
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+            } else {
                 Box(
                     Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                0.35f to Color.Transparent,
-                                0.75f to Ink.Bg.copy(alpha = 0.85f),
-                                1f to Ink.Bg,
+                        .fillMaxWidth()
+                        .height(260.dp)
+                ) {
+                    AsyncImage(
+                        model = poster,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    0.35f to Color.Transparent,
+                                    0.75f to Ink.Bg.copy(alpha = 0.85f),
+                                    1f to Ink.Bg,
+                                )
                             )
-                        )
-                )
+                    )
+                }
             }
 
             Column(Modifier.padding(horizontal = 18.dp)) {
@@ -234,19 +249,25 @@ fun DetailSheet(
                 val sources = detail?.sources.orEmpty()
                 if (sources.isNotEmpty()) {
                     Text(
-                        "播放",
+                        "清晰度",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Ink.TextPrimary,
                         modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         sources.sortedByDescending { it.quality }.forEach { s ->
+                            // Switching quality restarts the inline player on the new
+                            // stream; the old full-screen route is now only entered
+                            // from the expand button.
                             SourceButton(
                                 label = "${s.quality}p",
                                 icon = null,
-                                accent = s.quality == bestQuality(sources, preferredQuality),
-                                onClick = { onPlay(detail!!, s) },
+                                accent = s.url == vm.inlineSource?.url,
+                                onClick = { vm.playInline(s) },
                             )
                         }
                     }
@@ -272,6 +293,51 @@ fun DetailSheet(
                                 onClick = { vm.download(s.quality) },
                             )
                         }
+                    }
+                }
+
+                // ---- collection -------------------------------------------
+                val listId = detail?.listId ?: 0L
+                if (listId > 0L) {
+                    val listTitle = detail?.listTitle.orEmpty()
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.06f))
+                            .clickable { onOpenCollection(listId, listTitle) }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.PlaylistPlay,
+                            contentDescription = null,
+                            tint = Ink.AccentSoft,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                            Text(
+                                "所属合集",
+                                fontSize = 10.5.sp,
+                                color = Ink.TextTertiary,
+                            )
+                            Text(
+                                listTitle.ifBlank { "查看合集" },
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Ink.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        Icon(
+                            Icons.Rounded.ChevronRight,
+                            contentDescription = null,
+                            tint = Ink.TextTertiary,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
 

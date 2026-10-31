@@ -1,6 +1,8 @@
 package com.hanime.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,33 +13,45 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.Text
 import com.hanime.app.core.Card
 import com.hanime.app.ui.theme.Ink
 import com.kyant.backdrop.Backdrop
 
 /**
  * Home: category chips on top, a sort row underneath, then either the rich
- * editorial rows ("全部") or a paged grid for a specific genre/sort.
+ * editorial rows ("全部") or a paged grid for a specific genre/sort/filter.
  *
  * The chips and the sort row are drawn as an overlay above the list rather than
  * as list items, so they stay put while content scrolls under the glass.
@@ -48,10 +62,14 @@ fun HomeScreen(
     backdrop: Backdrop?,
     watched: Set<Long>,
     topInset: Int,
+    hideWatched: Boolean,
+    onToggleHideWatched: () -> Unit,
+    onOpenSearch: () -> Unit,
     onOpen: (Card) -> Unit,
 ) {
     val gridState = rememberLazyStaggeredGridState()
     val listState = rememberLazyListState()
+    var sheetOpen by remember { mutableStateOf(false) }
 
     // Paging trigger: fire once the last row is within two cells of the end.
     val nearEnd by remember {
@@ -124,11 +142,11 @@ fun HomeScreen(
                 // Opaque until just under the chip rows: cards scrolling underneath used
                 // to show through the old 92% stop and collide with the title.
                 .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                    Brush.verticalGradient(
                         0f to Ink.Bg,
                         0.72f to Ink.Bg,
                         0.93f to Ink.Bg.copy(alpha = 0.55f),
-                        1f to androidx.compose.ui.graphics.Color.Transparent,
+                        1f to Color.Transparent,
                     )
                 )
                 .padding(top = topInset.dp)
@@ -136,15 +154,25 @@ fun HomeScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 4.dp),
+                    .padding(start = 18.dp, end = 12.dp, top = 6.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Hanime", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextPrimary)
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = if (vm.isGridMode) "第 ${vm.feedPage} 页" else "今日更新",
-                    fontSize = 11.sp,
-                    color = Ink.TextTertiary,
+
+                // Quick toggles. Hiding watched videos used to be three taps deep in
+                // Settings, which is far from where the user notices a watched card.
+                HeaderButton(
+                    icon = if (hideWatched) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                    description = if (hideWatched) "显示已观看" else "屏蔽已观看",
+                    active = hideWatched,
+                    onClick = onToggleHideWatched,
+                )
+                HeaderButton(
+                    icon = Icons.Rounded.Search,
+                    description = "搜索",
+                    active = false,
+                    onClick = onOpenSearch,
                 )
             }
 
@@ -163,11 +191,48 @@ fun HomeScreen(
                 }
             }
 
-            // Sort switch (标签/排序/发布日期…)
+            // Sort switch, prefixed by the filter entry that carries date/duration/tags.
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                item {
+                    val active = vm.date.isNotBlank() || vm.duration.isNotBlank() || vm.tags.isNotEmpty()
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (active) Ink.Accent.copy(alpha = 0.22f)
+                                else Color.White.copy(alpha = 0.07f)
+                            )
+                            .clickable {
+                                vm.ensureTagGroups()
+                                sheetOpen = true
+                            }
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Tune,
+                            contentDescription = "筛选",
+                            tint = if (active) Ink.AccentSoft else Ink.TextSecondary,
+                            modifier = Modifier.size(13.dp),
+                        )
+                        Text(
+                            if (active) {
+                                buildList {
+                                    if (vm.date.isNotBlank()) add(vm.date)
+                                    if (vm.duration.isNotBlank()) add(vm.duration)
+                                    if (vm.tags.isNotEmpty()) add("${vm.tags.size} 标签")
+                                }.joinToString(" · ")
+                            } else "筛选",
+                            fontSize = 11.5.sp,
+                            color = if (active) Ink.AccentSoft else Ink.TextSecondary,
+                            modifier = Modifier.padding(start = 5.dp),
+                        )
+                    }
+                }
                 items(SORTS) { s ->
                     GlassChip(
                         text = s,
@@ -194,5 +259,43 @@ fun HomeScreen(
                 LoadingDots()
             }
         }
+
+        if (sheetOpen) {
+            FilterSheet(
+                vm = vm,
+                onDismiss = { sheetOpen = false },
+                onApply = { sheetOpen = false },
+            )
+        }
+    }
+}
+
+/** Round 32dp header action; filled when the toggle it controls is on. */
+@Composable
+private fun HeaderButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .padding(start = 6.dp)
+            .size(34.dp)
+            .clip(RoundedCornerShape(50))
+            .background(if (active) Ink.Accent.copy(alpha = 0.20f) else Color.White.copy(alpha = 0.07f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = description,
+            tint = if (active) Ink.AccentSoft else Ink.TextSecondary,
+            modifier = Modifier.size(17.dp),
+        )
     }
 }

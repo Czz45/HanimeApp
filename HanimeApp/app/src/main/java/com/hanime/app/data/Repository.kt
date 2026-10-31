@@ -7,8 +7,10 @@ import com.hanime.app.core.DownloadTask
 import com.hanime.app.core.Json
 import com.hanime.app.core.ListPage
 import com.hanime.app.core.Native
+import com.hanime.app.core.Playlist
 import com.hanime.app.core.Section
 import com.hanime.app.core.Settings
+import com.hanime.app.core.TagGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +56,33 @@ class Repository {
 
     suspend fun search(query: String, page: Int = 1): ListPage = withContext(Dispatchers.IO) {
         Json.listPage(Native.fetchSearch(query, page))
+    }
+
+    /** Search with the whole filter set; every argument composes with the others. */
+    suspend fun searchFiltered(
+        query: String,
+        genre: String,
+        sort: String,
+        date: String,
+        duration: String,
+        tags: List<String>,
+        broad: Boolean,
+        page: Int = 1,
+    ): ListPage = withContext(Dispatchers.IO) {
+        Json.listPage(
+            Native.fetchSearchFiltered(
+                query, genre, sort, date, duration,
+                tags.joinToString("\u0001"), broad, page,
+            )
+        )
+    }
+
+    suspend fun tagGroups(): List<TagGroup> = withContext(Dispatchers.IO) {
+        Json.tagGroups(Native.tagGroups())
+    }
+
+    suspend fun playlist(id: Long): Playlist = withContext(Dispatchers.IO) {
+        Json.playlist(Native.fetchPlaylist(id))
     }
 
     suspend fun detail(id: Long): Detail = withContext(Dispatchers.IO) {

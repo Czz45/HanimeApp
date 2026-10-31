@@ -5,6 +5,7 @@
 pub mod html;
 pub mod model;
 pub mod net;
+pub mod tags;
 
 #[cfg(feature = "jni-bridge")]
 pub mod jni;
@@ -268,13 +269,81 @@ pub fn fetch_list(
 }
 
 pub fn fetch_search(query: &str, page: u32) -> Result<String, String> {
-    let url = format!(
-        "{BASE}/search?query={}&page={page}",
-        net::percent_encode(query)
-    );
-    let html = net::get(&url)?;
+    fetch_search_filtered(query, "", "", "", "", &[], false, page)
+}
+
+/// `/search` with every filter the site exposes.
+///
+/// The search box and the genre/sort/date/duration/tag dropdowns all submit to
+/// the same endpoint, and they compose — `query=櫻&genre=裏番&tags[]=無碼` is a
+/// valid combination, so one function serves both the plain search field and the
+/// filter sheet.
+#[allow(clippy::too_many_arguments)]
+pub fn fetch_search_filtered(
+    query: &str,
+    genre: &str,
+    sort: &str,
+    date: &str,
+    duration: &str,
+    tags: &[String],
+    broad: bool,
+    page: u32,
+) -> Result<String, String> {
+    let html = net::get(&url_for_search(
+        query, genre, sort, date, duration, tags, broad, page,
+    ))?;
     let lp = filter_watched(html::parse_list(&html, page)?);
     serde_json::to_string(&lp).map_err(|e| e.to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn url_for_search(
+    query: &str,
+    genre: &str,
+    sort: &str,
+    date: &str,
+    duration: &str,
+    tags: &[String],
+    broad: bool,
+    page: u32,
+) -> String {
+    let mut u = format!("{BASE}/search?");
+    if !query.trim().is_empty() {
+        u.push_str(&format!("query={}&", net::percent_encode(query.trim())));
+    }
+    if !genre.is_empty() && genre != "全部" {
+        u.push_str(&format!("genre={}&", net::percent_encode(genre)));
+    }
+    if !sort.is_empty() {
+        u.push_str(&format!("sort={}&", net::percent_encode(sort)));
+    }
+    if !date.is_empty() {
+        u.push_str(&format!("date={}&", net::percent_encode(date)));
+    }
+    if !duration.is_empty() {
+        u.push_str(&format!("duration={}&", net::percent_encode(duration)));
+    }
+    // Laravel reads repeated `tags[]=`, so the name is repeated per value.
+    for t in tags {
+        if !t.is_empty() {
+            u.push_str(&format!("tags%5B%5D={}&", net::percent_encode(t)));
+        }
+    }
+    if broad && !tags.is_empty() {
+        u.push_str("broad=on&");
+    }
+    u.push_str(&format!("page={page}"));
+    u
+}
+
+pub fn tag_groups_json() -> String {
+    serde_json::to_string(&tags::tag_groups()).unwrap_or_else(|_| "[]".into())
+}
+
+pub fn fetch_playlist(id: i64) -> Result<String, String> {
+    let html = net::get(&format!("{BASE}/playlist?list={id}&sort=latest"))?;
+    let pl = html::parse_playlist(&html, id)?;
+    serde_json::to_string(&pl).map_err(|e| e.to_string())
 }
 
 pub fn fetch_detail(id: i64) -> Result<String, String> {

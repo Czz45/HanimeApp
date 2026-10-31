@@ -20,6 +20,25 @@ object Native {
     external fun fetchHome(): String
     external fun fetchList(genre: String, sort: String, date: String, duration: String, page: Int): String
     external fun fetchSearch(query: String, page: Int): String
+
+    /**
+     * `/search` with the full filter set. [tags] are joined by U+0001 because the
+     * values contain commas and pipes that would break a plainer separator.
+     */
+    external fun fetchSearchFiltered(
+        query: String,
+        genre: String,
+        sort: String,
+        date: String,
+        duration: String,
+        tags: String,
+        broad: Boolean,
+        page: Int,
+    ): String
+
+    external fun tagGroups(): String
+    external fun fetchPlaylist(id: Long): String
+
     external fun fetchDetail(id: Long): String
 
     external fun startDownload(id: Long, quality: Int): String

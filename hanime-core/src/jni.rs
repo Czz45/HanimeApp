@@ -92,6 +92,67 @@ pub extern "system" fn Java_com_hanime_app_core_Native_fetchDetail(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchSearchFiltered(
+    mut env: JNIEnv,
+    _class: JClass,
+    query: JString,
+    genre: JString,
+    sort: JString,
+    date: JString,
+    duration: JString,
+    tags_csv: JString,
+    broad: jni::sys::jboolean,
+    page: jni::sys::jint,
+) -> jstring {
+    let q = from_java(&mut env, query);
+    let g = from_java(&mut env, genre);
+    let s = from_java(&mut env, sort);
+    let d = from_java(&mut env, date);
+    let du = from_java(&mut env, duration);
+    let raw = from_java(&mut env, tags_csv);
+    let tags: Vec<String> = raw
+        .split('\u{1}')
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect();
+    let out = match crate::fetch_search_filtered(
+        &q,
+        &g,
+        &s,
+        &d,
+        &du,
+        &tags,
+        broad != 0,
+        page.max(1) as u32,
+    ) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_tagGroups(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    to_java(&env, crate::tag_groups_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchPlaylist(
+    env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jstring {
+    let out = match crate::fetch_playlist(id) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
     _env: JNIEnv,
     _class: JClass,

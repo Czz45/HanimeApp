@@ -55,6 +55,42 @@ pub struct Detail {
     pub desc: String,
     pub sources: Vec<Source>,
     pub related: Vec<Card>,
+    /// Playlist id this video belongs to (`?list=` on the watch URL). 0 when the
+    /// upload is standalone.
+    pub list_id: i64,
+    /// Playlist title, so the detail sheet can offer "看合集" without another
+    /// request.
+    pub list_title: String,
+}
+
+/// One checkbox in the site's tag filter (`name="tags[]"`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct Tag {
+    /// Value actually submitted to the server (traditional Chinese).
+    pub value: String,
+    /// Simplified label rendered in the picker.
+    pub label: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct TagGroup {
+    pub name: String,
+    pub tags: Vec<Tag>,
+}
+
+/// A video plus the playlist that contains it. The watch page links every
+/// episode of a series through `?list=<id>`, and the list itself has a title and
+/// an order that the plain [Card] does not carry.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct Playlist {
+    pub id: i64,
+    pub title: String,
+    pub author: String,
+    pub count: u32,
+    pub items: Vec<Card>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

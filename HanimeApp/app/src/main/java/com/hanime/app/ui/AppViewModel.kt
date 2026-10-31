@@ -28,17 +28,37 @@ val GENRES = listOf(
     "2D動畫", "AI生成", "MMD", "Cosplay", "新番預告",
 )
 
+/**
+ * Sort dropdown values. Date ranges used to be mixed in here, which silently
+ * turned a sort switch into a `sort=` the site does not know; they live in
+ * [DATES] now and travel as the separate `date=` parameter.
+ */
 val SORTS = listOf(
     "最新上市", "最新上傳", "本日排行", "本週排行", "本月排行",
     "觀看次數", "讚好比例", "時長最長", "他們在看",
-    "過去 24 小時", "過去 2 天", "過去 1 週", "過去 1 個月", "過去 3 個月",
 )
+
+/** "发布日期" dropdown. Empty means no date filter. */
+val DATES = listOf(
+    "", "過去 24 小時", "過去 2 天", "過去 1 週", "過去 1 個月", "過去 3 個月", "過去 1 年",
+)
+
+/** "时长" dropdown. Empty means no duration filter. */
+val DURATIONS = listOf(
+    "", "0 - 10 分鐘", "0 - 20 分鐘", "10 分鐘 +", "20 分鐘 +", "30 分鐘 +", "60 分鐘 +",
+)
+
+/** Label shown on a chip for an empty filter value. */
+fun filterLabel(value: String, fallback: String): String = value.ifBlank { fallback }
 
 /** Where the floating player / detail sheet sits above the tab content. */
 sealed interface Route {
     data object Tabs : Route
     data class Info(val id: Long, val seed: Card?) : Route
+    /** Full-screen playback; the inline player lives inside [Info] instead. */
     data class Player(val detail: Detail, val source: Source) : Route
+    data object Search : Route
+    data class Collection(val id: Long, val title: String) : Route
 }
 
 class AppViewModel : ViewModel() {
@@ -58,6 +78,16 @@ class AppViewModel : ViewModel() {
         private set
     var sort by mutableStateOf("最新上市")
         private set
+    /** Empty string means "no filter" for both of these. */
+    var date by mutableStateOf("")
+        private set
+    var duration by mutableStateOf("")
+        private set
+    /** Tag values (`tags[]`) currently selected. Empty means "no tag filter". */
+    val tags = mutableStateListOf<String>()
+    /** `broad=on`: match any selected tag instead of all of them. */
+    var broad by mutableStateOf(false)
+        private set
 
     val sections = mutableStateListOf<Section>()
     val feed = mutableStateListOf<Card>()
@@ -74,7 +104,34 @@ class AppViewModel : ViewModel() {
         private set
 
     /** Sorting the flat list is the only mode that paginates. */
-    val isGridMode: Boolean get() = genre != "全部" || sort != "最新上市"
+    val isGridMode: Boolean
+        get() = genre != "全部" || sort != "最新上市" ||
+            date.isNotBlank() || duration.isNotBlank() || tags.isNotEmpty()
+
+    // ---- tag picker ------------------------------------------------------
+    var tagGroups by mutableStateOf<List<com.hanime.app.core.TagGroup>>(emptyList())
+        private set
+
+    // ---- search ----------------------------------------------------------
+    var query by mutableStateOf("")
+        private set
+    val searchResults = mutableStateListOf<Card>()
+    var searchPage by mutableStateOf(1)
+        private set
+    var searchHasNext by mutableStateOf(false)
+        private set
+    var searching by mutableStateOf(false)
+        private set
+    var searchError by mutableStateOf<String?>(null)
+        private set
+
+    // ---- collection ------------------------------------------------------
+    var collection by mutableStateOf<com.hanime.app.core.Playlist?>(null)
+        private set
+    var collectionLoading by mutableStateOf(false)
+        private set
+    var collectionError by mutableStateOf<String?>(null)
+        private set
 
     // ---- detail ----------------------------------------------------------
     var detail by mutableStateOf<Detail?>(null)
@@ -82,6 +139,17 @@ class AppViewModel : ViewModel() {
     var detailLoading by mutableStateOf(false)
         private set
     var detailError by mutableStateOf<String?>(null)
+
+    /** Source picked for the inline player; null until the user taps a quality. */
+    var inlineSource by mutableStateOf<Source?>(null)
+        private set
+
+    /**
+     * Route to return to when the detail sheet is closed. Titles are opened from
+     * the feed, from search results and from inside a collection, and each of
+     * those has to be restored rather than dropping back to the tabs.
+     */
+    private var detailOrigin: Route = Route.Tabs
 
     /** Transient failure text for actions (download, delete). Never gates a retry. */
     var notice by mutableStateOf<String?>(null)
@@ -112,15 +180,61 @@ class AppViewModel : ViewModel() {
         refreshFeed()
     }
 
-    /** Reloads whatever the current genre/sort pair maps to. */
+    fun chooseDate(value: String) {
+        if (date == value) return
+        date = value
+        refreshFeed()
+    }
+
+    fun chooseDuration(value: String) {
+        if (duration == value) return
+        duration = value
+        refreshFeed()
+    }
+
+    fun toggleTag(value: String) {
+        if (!tags.remove(value)) tags.add(value)
+        refreshFeed()
+    }
+
+    fun changeBroad(on: Boolean) {
+        if (broad == on) return
+        broad = on
+        refreshFeed()
+    }
+
+    fun clearFilters() {
+        if (tags.isEmpty() && date.isBlank() && duration.isBlank() && !broad) return
+        tags.clear()
+        date = ""
+        duration = ""
+        broad = false
+        refreshFeed()
+    }
+
+    /** Fetched once, on first open of the tag sheet. */
+    fun ensureTagGroups() {
+        if (tagGroups.isNotEmpty()) return
+        viewModelScope.launch {
+            runCatching { repo.tagGroups() }.onSuccess { tagGroups = it }
+        }
+    }
+
+    /** Reloads whatever the current genre/sort/filter combination maps to. */
     fun refreshFeed() {
         feedJob?.cancel()
         error = null
         loading = true
         feedJob = viewModelScope.launch {
             runCatching {
+                // The plain home rows can only answer "no filters at all"; anything
+                // else (genre, sort, date, duration, tags) needs the /search grid.
                 if (isGridMode) {
-                    val page = repo.list(genre, sort, page = 1)
+                    val page = repo.searchFiltered(
+                        query = "", genre = genre, sort = sort,
+                        date = date, duration = duration,
+                        tags = tags.toList(), broad = broad, page = 1,
+                    )
                     sections.clear()
                     feed.clear()
                     feed.addAll(page.items)
@@ -146,13 +260,85 @@ class AppViewModel : ViewModel() {
         loadingMore = true
         viewModelScope.launch {
             runCatching {
-                val page = repo.list(genre, sort, page = feedPage + 1)
+                val page = repo.searchFiltered(
+                    query = "", genre = genre, sort = sort,
+                    date = date, duration = duration,
+                    tags = tags.toList(), broad = broad, page = feedPage + 1,
+                )
                 val known = feed.mapTo(HashSet()) { it.id }
                 feed.addAll(page.items.filterNot { it.id in known })
                 feedPage = page.page
                 hasNext = page.hasNext
             }.onFailure { error = it.userMessage() }
             loadingMore = false
+        }
+    }
+
+    // ---- search ----------------------------------------------------------
+
+    fun openSearch() {
+        route = Route.Search
+    }
+
+    fun submitSearch(text: String) {
+        query = text
+        searching = true
+        searchError = null
+        searchResults.clear()
+        searchPage = 1
+        viewModelScope.launch {
+            runCatching {
+                repo.searchFiltered(
+                    query = text, genre = genre, sort = sort,
+                    date = date, duration = duration,
+                    tags = tags.toList(), broad = broad, page = 1,
+                )
+            }
+                .onSuccess {
+                    searchResults.addAll(it.items)
+                    searchHasNext = it.hasNext
+                    searchPage = it.page
+                }
+                .onFailure { searchError = it.userMessage() }
+            searching = false
+        }
+    }
+
+    fun searchMore() {
+        if (searching || !searchHasNext) return
+        searching = true
+        viewModelScope.launch {
+            runCatching {
+                repo.searchFiltered(
+                    query = query, genre = genre, sort = sort,
+                    date = date, duration = duration,
+                    tags = tags.toList(), broad = broad, page = searchPage + 1,
+                )
+            }
+                .onSuccess {
+                    val known = searchResults.mapTo(HashSet()) { it.id }
+                    searchResults.addAll(it.items.filterNot { c -> c.id in known })
+                    searchPage = it.page
+                    searchHasNext = it.hasNext
+                }
+                .onFailure { searchError = it.userMessage() }
+            searching = false
+        }
+    }
+
+    // ---- collection ------------------------------------------------------
+
+    fun openCollection(id: Long, title: String) {
+        if (id <= 0L) return
+        route = Route.Collection(id, title)
+        collection = null
+        collectionError = null
+        collectionLoading = true
+        viewModelScope.launch {
+            runCatching { repo.playlist(id) }
+                .onSuccess { collection = it }
+                .onFailure { collectionError = it.userMessage() }
+            collectionLoading = false
         }
     }
 
@@ -171,29 +357,62 @@ class AppViewModel : ViewModel() {
     // ---- navigation ------------------------------------------------------
 
     fun openDetail(id: Long, seed: Card? = null) {
+        // Remember where the user came from so [back] can unwind one level at a
+        // time: a title opened from search results returns to those results.
+        detailOrigin = when (val r = route) {
+            is Route.Search -> Route.Search
+            is Route.Collection -> Route.Collection(r.id, r.title)
+            else -> Route.Tabs
+        }
         route = Route.Info(id, seed)
         detail = null
         detailError = null
+        inlineSource = null
         detailLoading = true
         detailJob?.cancel()
         detailJob = viewModelScope.launch {
             runCatching { repo.detail(id) }
-                .onSuccess { detail = it }
+                .onSuccess { d ->
+                    detail = d
+                    // The sheet plays inline now: pick the user's preferred quality
+                    // right away so the player shows up filled instead of as a poster.
+                    inlineSource = d.sources.minByOrNull {
+                        kotlin.math.abs(it.quality - settings.value.preferredQuality)
+                    }
+                }
                 .onFailure { detailError = it.userMessage() }
             detailLoading = false
         }
     }
 
-    fun play(source: Source) {
+    /** Starts (or restarts) the inline player inside the detail sheet. */
+    fun playInline(source: Source) {
         val d = detail ?: return
-        route = Route.Player(d, source)
+        inlineSource = source
         viewModelScope.launch { repo.markWatched(d.id) }
     }
 
+    /** Opens the same title full screen, keeping the already chosen quality. */
+    fun playFullscreen(source: Source? = null) {
+        val d = detail ?: return
+        val src = source ?: inlineSource ?: d.sources.maxByOrNull { it.quality } ?: return
+        route = Route.Player(d, src)
+        viewModelScope.launch { repo.markWatched(d.id) }
+    }
+
+    /**
+     * Pops one level. Screens pushed on top of a detail page have to return to
+     * it, not to the tabs: opening a collection from a title and then backing out
+     * used to drop the user on the home feed.
+     */
     fun back() {
         route = when (val r = route) {
             is Route.Player -> Route.Info(r.detail.id, null)
-            else -> Route.Tabs
+            // A collection lives on top of the title it was opened from.
+            is Route.Collection -> Route.Info(r.id, null)
+            is Route.Info -> detailOrigin
+            is Route.Search -> Route.Tabs
+            Route.Tabs -> Route.Tabs
         }
     }
 
@@ -233,7 +452,9 @@ class AppViewModel : ViewModel() {
             poster = task.cover,
             sources = listOf(Source(task.quality, "file://${task.path}")),
         )
-        route = Route.Player(local, local.sources.first())
+        detail = local
+        inlineSource = local.sources.first()
+        route = Route.Info(task.id, null)
         viewModelScope.launch { repo.markWatched(task.id) }
     }
 
