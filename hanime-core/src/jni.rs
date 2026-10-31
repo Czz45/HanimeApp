@@ -1,0 +1,216 @@
+//! JNI surface. Kotlin calls these as `com.hanime.app.core.Native` statics and
+//! gets JSON back, so the bridge never has to know about model classes.
+
+use jni::objects::{JClass, JString};
+use jni::sys::jstring;
+use jni::JNIEnv;
+
+fn from_java(env: &mut JNIEnv, s: JString) -> String {
+    env.get_string(&s)
+        .map(|j| j.into())
+        .unwrap_or_default()
+}
+
+fn to_java(env: &JNIEnv, s: String) -> jstring {
+    match env.new_string(s) {
+        Ok(v) => v.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_init(
+    mut env: JNIEnv,
+    _class: JClass,
+    dir: JString,
+) {
+    let dir = from_java(&mut env, dir);
+    std::env::set_var("HANIME_STATE_DIR", &dir);
+    let _ = std::fs::create_dir_all(&dir);
+    crate::rescan_library();
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchHome(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let out = match crate::fetch_home() {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchList(
+    mut env: JNIEnv,
+    _class: JClass,
+    genre: JString,
+    sort: JString,
+    date: JString,
+    duration: JString,
+    page: jni::sys::jint,
+) -> jstring {
+    let g = from_java(&mut env, genre);
+    let s = from_java(&mut env, sort);
+    let d = from_java(&mut env, date);
+    let du = from_java(&mut env, duration);
+    let out = match crate::fetch_list(&g, &s, &d, &du, page.max(1) as u32) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    query: JString,
+    page: jni::sys::jint,
+) -> jstring {
+    let q = from_java(&mut env, query);
+    let out = match crate::fetch_search(&q, page.max(1) as u32) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchDetail(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jstring {
+    let out = match crate::fetch_detail(id) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&_env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    quality: jni::sys::jint,
+) -> jstring {
+    let out = match crate::start_download(id, quality.max(0) as u32) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&_env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_cancelDownload(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) {
+    crate::cancel_download(id);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_removeDownload(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    delete_file: jni::sys::jboolean,
+) {
+    crate::remove_download(id, delete_file != 0);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_rescanLibrary(env: JNIEnv, _class: JClass) {
+    crate::rescan_library();
+    let _ = env;
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_libraryJson(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::library_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_downloadDir(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::download_dir().to_string_lossy().to_string())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_localFileExists(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jni::sys::jboolean {
+    if crate::local_file_exists(id) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_markWatched(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) {
+    crate::mark_watched(id);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_isWatched(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jni::sys::jboolean {
+    if crate::is_watched(id) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_watchedJson(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::watched_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_clearWatched(env: JNIEnv, _class: JClass) {
+    crate::clear_watched();
+    let _ = env;
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_getSettingsJson(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::get_settings_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_setSettingsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    json: JString,
+) -> jstring {
+    let j = from_java(&mut env, json);
+    to_java(&env, crate::set_settings_json(&j))
+}
+
+fn escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ")
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_setProxy(
+    mut env: JNIEnv,
+    _class: JClass,
+    value: JString,
+) {
+    let v = from_java(&mut env, value);
+    crate::set_system_proxy(&v);
+}
