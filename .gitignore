@@ -10,3 +10,6 @@ target/
 *.iml
 .idea/
 .DS_Store
+
+# 预编译的 Rust .so 属于构建产物，Release 附件里有完整 APK
+HanimeApp/app/src/main/jniLibs/
