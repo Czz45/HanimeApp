@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,6 +25,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -211,9 +213,19 @@ fun SettingsScreen(
 @Composable
 private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop?) {
     val info = vm.updateInfo
+    val progress = vm.updateProgress
     val hasNewer = info != null && info.version.isNotBlank() && info.version != appVersion &&
         runCatching { compareVersions(info.version, appVersion) > 0 }.getOrDefault(false)
     val context = androidx.compose.ui.platform.LocalContext.current
+    val downloading = progress.state == "running"
+
+    // Install once the transfer lands. Doing it here rather than inside the click
+    // keeps the button single-purpose and survives a recomposition mid-download.
+    LaunchedEffect(progress.state, progress.detail) {
+        if (progress.state == "done" && progress.detail.isNotBlank()) {
+            installApk(context, progress.detail)
+        }
+    }
 
     SettingsGroup("关于", backdrop) {
         Row(
@@ -226,6 +238,8 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
                 Text("当前版本", fontSize = 13.sp, color = Ink.TextPrimary)
                 Text(
                     when {
+                        downloading -> "正在下载 ${(progress.fraction * 100).toInt()}%"
+                        progress.state == "error" -> "下载失败：${progress.detail}"
                         vm.updateChecking -> "正在检查…"
                         vm.updateError != null -> "检查失败：${vm.updateError}"
                         hasNewer -> "有新版本 ${info!!.version}"
@@ -234,6 +248,7 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
                     },
                     fontSize = 10.5.sp,
                     color = when {
+                        progress.state == "error" -> Color(0xFFFF8A8A)
                         vm.updateError != null -> Color(0xFFFF8A8A)
                         hasNewer -> Ink.Mint
                         else -> Ink.TextTertiary
@@ -250,19 +265,12 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
             Box(
                 Modifier
                     .clip(RoundedCornerShape(50))
-                    .background(Ink.Accent.copy(alpha = 0.18f))
-                    .clickable(enabled = !vm.updateChecking) {
+                    .background(Ink.Accent.copy(alpha = if (downloading) 0.10f else 0.18f))
+                    .clickable(enabled = !vm.updateChecking && !downloading) {
                         if (hasNewer) {
-                            // The asset link goes straight to the APK, so hand it to
-                            // the browser: Android's package installer takes over.
-                            runCatching {
-                                context.startActivity(
-                                    android.content.Intent(
-                                        android.content.Intent.ACTION_VIEW,
-                                        android.net.Uri.parse(info!!.url),
-                                    )
-                                )
-                            }
+                            // Android's installer only accepts a local file this app
+                            // owns, so pull the APK into the cache first.
+                            vm.downloadUpdate(context.cacheDir.absolutePath)
                         } else {
                             vm.checkForUpdate()
                         }
@@ -272,12 +280,31 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
             ) {
                 Text(
                     when {
+                        downloading -> "${(progress.fraction * 100).toInt()}%"
                         vm.updateChecking -> "检查中"
-                        hasNewer -> "去下载"
+                        hasNewer -> "下载更新"
                         else -> "检查更新"
                     },
                     fontSize = 11.sp,
                     color = Ink.AccentSoft,
+                )
+            }
+        }
+        if (downloading) {
+            Divider()
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.10f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(progress.fraction)
+                        .fillMaxHeight()
+                        .background(Ink.Accent)
                 )
             }
         }
@@ -304,6 +331,32 @@ private fun compareVersions(a: String, b: String): Int {
         if (x != y) return x - y
     }
     return 0
+}
+
+/**
+ * Hands the downloaded APK to the system installer.
+ *
+ * The cache file is exposed through the manifest's FileProvider: a `file://` URI
+ * throws FileUriExposedException from API 24 on, and the installer also needs an
+ * explicit read grant on the URI it receives.
+ */
+private fun installApk(context: android.content.Context, path: String) {
+    runCatching {
+        val file = java.io.File(path)
+        if (!file.exists()) throw IllegalStateException("安装包不存在")
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+        context.startActivity(
+            android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
 }
 
 @Composable

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The in-app updater writes the APK into the cache and hands the installer a
+  content:// URI. Since API 24 a file:// URI throws FileUriExposedException, and
+  the installer also refuses URIs it cannot read, so the cache path has to be
+  exposed through a provider with a read grant.
+-->
+<paths>
+    <cache-path name="updates" path="." />
+    <files-path name="files" path="." />
+</paths>

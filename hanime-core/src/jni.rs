@@ -179,6 +179,40 @@ pub extern "system" fn Java_com_hanime_app_core_Native_checkUpdate(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_downloadUpdate(
+    mut env: JNIEnv,
+    _class: JClass,
+    url: JString,
+    dest: JString,
+) -> jstring {
+    let u = from_java(&mut env, url);
+    let d = from_java(&mut env, dest);
+    let out = match crate::download_update(&u, &d) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_updateDownloadState(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    to_java(&env, crate::update_download_state())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_translateTitle(
+    mut env: JNIEnv,
+    _class: JClass,
+    text: JString,
+) -> jstring {
+    let t = from_java(&mut env, text);
+    to_java(&env, crate::translate_title(&t))
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
     mut env: JNIEnv,
     _class: JClass,

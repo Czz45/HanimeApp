@@ -69,7 +69,10 @@ fun CollectionScreen(
                 item {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
                         Text(
-                            pl.title,
+                            // Prefer the translated name once it arrives; the raw
+                            // Japanese title stays as the fallback and as the folder
+                            // name the downloader already used.
+                            vm.collectionTitle.ifBlank { pl.title },
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold,
                             color = Ink.TextPrimary,

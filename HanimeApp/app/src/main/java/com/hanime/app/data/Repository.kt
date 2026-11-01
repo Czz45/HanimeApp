@@ -12,6 +12,7 @@ import com.hanime.app.core.Section
 import com.hanime.app.core.Settings
 import com.hanime.app.core.TagGroup
 import com.hanime.app.core.UpdateInfo
+import com.hanime.app.core.UpdateProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -145,6 +146,21 @@ class Repository {
 
     suspend fun checkUpdate(): UpdateInfo = withContext(Dispatchers.IO) {
         Json.update(Native.checkUpdate())
+    }
+
+    /** Localizes a Japanese collection name; the core returns the input on failure. */
+    suspend fun translateTitle(text: String): String = withContext(Dispatchers.IO) {
+        if (text.isBlank()) text else Native.translateTitle(text)
+    }
+
+    /** Starts the APK transfer; progress arrives through [updateProgress]. */
+    suspend fun downloadUpdate(url: String, dest: String) = withContext(Dispatchers.IO) {
+        val raw = Native.downloadUpdate(url, dest)
+        Json.parse<Unit>(raw) { }
+    }
+
+    suspend fun updateProgress(): UpdateProgress = withContext(Dispatchers.IO) {
+        Json.updateProgress(Native.updateDownloadState())
     }
 
     suspend fun cancelDownload(id: Long) = withContext(Dispatchers.IO) {

@@ -112,6 +112,19 @@ data class UpdateInfo(
     val published: String = "",
 )
 
+/** Progress of the in-app APK download. */
+data class UpdateProgress(
+    val done: Long = 0,
+    val total: Long = 0,
+    /** idle | running | done | error */
+    val state: String = "idle",
+    /** Absolute path of the APK once done, otherwise the failure message. */
+    val detail: String = "",
+) {
+    val fraction: Float
+        get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+}
+
 data class Settings(
     val proxy: String = "",
     val hideWatched: Boolean = true,

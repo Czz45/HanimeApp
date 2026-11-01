@@ -48,6 +48,16 @@ object Native {
 
     /** Latest GitHub release for the in-app updater. */
     external fun checkUpdate(): String
+
+    /** Downloads the update APK to [dest] on a detached thread; poll [updateDownloadState]. */
+    external fun downloadUpdate(url: String, dest: String): String
+
+    /** `{"done":N,"total":M,"state":"running|done|error","detail":"…"}`. */
+    external fun updateDownloadState(): String
+
+    /** Localizes a Japanese collection title; returns the input when unavailable. */
+    external fun translateTitle(text: String): String
+
     external fun cancelDownload(id: Long)
     external fun removeDownload(id: Long, deleteFile: Boolean)
     external fun rescanLibrary()

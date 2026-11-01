@@ -133,6 +133,10 @@ class AppViewModel : ViewModel() {
     var collectionError by mutableStateOf<String?>(null)
         private set
 
+    /** Raw name first, then the translated one once it arrives. */
+    var collectionTitle by mutableStateOf("")
+        private set
+
     /** True while a batch (whole-collection) download is being queued. */
     var batchDownloading by mutableStateOf(false)
         private set
@@ -143,6 +147,10 @@ class AppViewModel : ViewModel() {
     var updateInfo by mutableStateOf<com.hanime.app.core.UpdateInfo?>(null)
         private set
     var updateError by mutableStateOf<String?>(null)
+        private set
+
+    /** APK transfer state; the settings row renders the bar and the install button. */
+    var updateProgress by mutableStateOf(com.hanime.app.core.UpdateProgress())
         private set
 
     // ---- detail ----------------------------------------------------------
@@ -340,17 +348,32 @@ class AppViewModel : ViewModel() {
 
     // ---- collection ------------------------------------------------------
 
+    /**
+     * Localizes the collection name.
+     *
+     * The list itself renders immediately from the raw title; the translated one
+     * replaces it when the request comes back, so a slow or offline translation
+     * never delays the page.
+     */
     fun openCollection(id: Long, title: String) {
         if (id <= 0L) return
         route = Route.Collection(id, title)
         collection = null
         collectionError = null
         collectionLoading = true
+        collectionTitle = title
         viewModelScope.launch {
             runCatching { repo.playlist(id) }
                 .onSuccess { collection = it }
                 .onFailure { collectionError = it.userMessage() }
             collectionLoading = false
+        }
+        viewModelScope.launch {
+            val localized = runCatching { repo.translateTitle(title) }.getOrDefault(title)
+            if (localized.isNotBlank() && localized != title) {
+                collectionTitle = localized
+                collection = collection?.copy(title = localized)
+            }
         }
     }
 
@@ -506,6 +529,37 @@ class AppViewModel : ViewModel() {
                 .onFailure { updateError = it.userMessage() }
             updateChecking = false
         }
+    }
+
+    /**
+     * Pulls the update APK into the app cache and polls until it lands.
+     *
+     * The package installer only accepts a file this app owns, so the settings row
+     * downloads first and installs second instead of handing a URL to the browser.
+     */
+    fun downloadUpdate(cacheDir: String) {
+        val info = updateInfo ?: return
+        if (info.url.isBlank()) return
+        if (updateProgress.state == "running") return
+        val dest = "$cacheDir/hanime-update-${info.version}.apk"
+        updateProgress = com.hanime.app.core.UpdateProgress(state = "running")
+        viewModelScope.launch {
+            runCatching { repo.downloadUpdate(info.url, dest) }
+                .onFailure { updateProgress = com.hanime.app.core.UpdateProgress(state = "error", detail = it.userMessage()) }
+            // The transfer runs on a detached thread in Rust, so the coroutine only
+            // has to observe it; 400 ms keeps the bar smooth without busy-looping.
+            while (isActive) {
+                delay(400)
+                val p = runCatching { repo.updateProgress() }.getOrDefault(updateProgress)
+                updateProgress = p
+                if (p.state != "running") break
+            }
+        }
+    }
+
+    fun clearUpdateError() {
+        updateError = null
+        updateProgress = com.hanime.app.core.UpdateProgress()
     }
 
     fun clearNotice() {

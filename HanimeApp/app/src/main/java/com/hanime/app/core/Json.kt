@@ -192,6 +192,16 @@ object Json {
         }
     }.getOrElse { UpdateInfo() }
 
+    fun updateProgress(raw: String): UpdateProgress = runCatching {
+        val o = JSONObject(raw)
+        UpdateProgress(
+            done = optLong(o, "done"),
+            total = optLong(o, "total"),
+            state = optString(o, "state").ifBlank { "idle" },
+            detail = optString(o, "detail"),
+        )
+    }.getOrElse { UpdateProgress() }
+
     fun settings(raw: String): Settings = runCatching {        val o = JSONObject(raw)
         Settings(
             proxy = optString(o, "proxy"),

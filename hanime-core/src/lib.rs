@@ -6,13 +6,14 @@ pub mod html;
 pub mod model;
 pub mod net;
 pub mod tags;
+pub mod translate;
 
 #[cfg(feature = "jni-bridge")]
 pub mod jni;
 
 use model::*;
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -346,6 +347,13 @@ pub fn fetch_playlist(id: i64) -> Result<String, String> {
     serde_json::to_string(&pl).map_err(|e| e.to_string())
 }
 
+/// Translates a title to Simplified Chinese. Exposed to the UI so the collection
+/// header can be localized without making [fetch_playlist] wait on a second round
+/// trip every time the page opens.
+pub fn translate_title(text: &str) -> String {
+    translate::translate_zh(text)
+}
+
 pub fn fetch_detail(id: i64) -> Result<String, String> {
     let url = format!("{BASE}/watch?v={id}");
     let html = net::get(&url)?;
@@ -413,6 +421,109 @@ pub fn check_update() -> Result<String, String> {
         "published": published,
     });
     serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+/// Progress of the in-app update download, polled by the settings screen.
+static UPDATE: OnceLock<Mutex<(u64, u64, String, String)>> = OnceLock::new();
+
+fn update_cell() -> &'static Mutex<(u64, u64, String, String)> {
+    // (done, total, state, path-or-error)
+    UPDATE.get_or_init(|| Mutex::new((0, 0, "idle".into(), String::new())))
+}
+
+/// `{"done":N,"total":M,"state":"running|done|error","detail":"path or message"}`.
+pub fn update_download_state() -> String {
+    let g = update_cell().lock().unwrap();
+    serde_json::json!({
+        "done": g.0,
+        "total": g.1,
+        "state": g.2,
+        "detail": g.3,
+    })
+    .to_string()
+}
+
+/// Downloads the update APK into the app cache so it can be handed to the
+/// installer.
+///
+/// Android's package installer cannot open a `https://` URL; it needs a readable
+/// file owned by this app (or a FileProvider), which is why the settings screen
+/// cannot simply fire an ACTION_VIEW intent at the release link the way it used
+/// to. The transfer runs detached and reports through [update_download_state].
+pub fn download_update(url: &str, dest: &str) -> Result<String, String> {
+    if url.trim().is_empty() {
+        return Err("更新地址为空".to_string());
+    }
+    {
+        let mut g = update_cell().lock().unwrap();
+        if g.2 == "running" {
+            return Err("正在下载中".to_string());
+        }
+        *g = (0, 0, "running".into(), String::new());
+    }
+    let url = url.to_string();
+    let dest = dest.to_string();
+    std::thread::spawn(move || {
+        let fail = |msg: String| {
+            let mut g = update_cell().lock().unwrap();
+            *g = (0, 0, "error".into(), msg);
+        };
+        if let Some(parent) = std::path::Path::new(&dest).parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                fail(e.to_string());
+                return;
+            }
+        }
+        let total = match net::file_size(&url) {
+            Ok((t, _)) => t,
+            Err(e) => {
+                fail(e);
+                return;
+            }
+        };
+        {
+            let mut g = update_cell().lock().unwrap();
+            g.1 = total;
+        }
+        let resp = match net::get_stream(&url, None) {
+            Ok(r) => r,
+            Err(e) => {
+                fail(e);
+                return;
+            }
+        };
+        let mut reader = resp.into_reader();
+        let mut file = match std::fs::File::create(&dest) {
+            Ok(f) => f,
+            Err(e) => {
+                fail(e.to_string());
+                return;
+            }
+        };
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut done = 0u64;
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    fail(e.to_string());
+                    return;
+                }
+            };
+            if let Err(e) = file.write_all(&buf[..n]) {
+                fail(e.to_string());
+                return;
+            }
+            done += n as u64;
+            let mut g = update_cell().lock().unwrap();
+            g.0 = done;
+        }
+        drop(file);
+        let mut g = update_cell().lock().unwrap();
+        *g = (done, total.max(done), "done".into(), dest);
+    });
+    Ok("{\"started\":true}".to_string())
 }
 
 // -------------------------------------------------------------- downloader
@@ -505,6 +616,14 @@ pub fn start_download_in(
     } else {
         (d.list_id, d.list_title.clone())
     };
+    // Localize the folder name on the single-download path too; the collection
+    // page passes its title in already translated, but a title reached from the
+    // home feed arrives with the raw Japanese playlist name.
+    let ltitle = if ltitle.trim().is_empty() {
+        ltitle
+    } else {
+        translate::translate_zh(&ltitle)
+    };
     let dir = dir_for_task(lid, &ltitle);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = file_for_in(&dir, id, src.quality, &d.title);
@@ -557,7 +676,10 @@ pub fn start_playlist_download(list_id: i64, quality: u32) -> Result<String, Str
         return Err("合集为空".to_string());
     }
     let ids: Vec<i64> = pl.items.iter().map(|c| c.id).collect();
-    let list_title = pl.title.clone();
+    // Folder name is the localized title, so the download tree is readable in the
+    // same language the rest of the UI uses. Falls back to the original when the
+    // translation endpoint is unreachable.
+    let list_title = translate::translate_zh(&pl.title);
 
     // Register every task up front so the downloads page shows the whole series
     // as pending instead of growing one row at a time.
