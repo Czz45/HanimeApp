@@ -105,6 +105,17 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
         }
     }
 
+    // The rotate button pins the activity to an orientation, and nothing else in
+    // the app ever clears it — backing out of the player used to leave the whole
+    // UI stuck in landscape. Remember what the manifest asked for on the way in
+    // and hand it back on the way out.
+    val initialOrientation = remember {
+        activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    DisposableEffect(Unit) {
+        onDispose { activity?.requestedOrientation = initialOrientation }
+    }
+
     DisposableEffect(Unit) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
