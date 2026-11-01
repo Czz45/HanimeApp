@@ -354,6 +354,67 @@ pub fn fetch_detail(id: i64) -> Result<String, String> {
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
 
+// ----------------------------------------------------------------- updates
+
+pub const RELEASES_API: &str = "https://api.github.com/repos/Czz45/HanimeApp/releases/latest";
+
+/// Latest published release, as a small JSON object for the UI:
+/// `{"version":"1.0.1","url":"…apk","notes":"…","published":"…"}`.
+///
+/// GitHub's API is unauthenticated here (60 requests/hour per IP), which is far
+/// more than a manual "check for updates" needs; failures are reported as-is so
+/// the settings row can show the real reason instead of a generic error.
+pub fn check_update() -> Result<String, String> {
+    let body = net::get_json(RELEASES_API)?;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("bad release json: {e}"))?;
+    let tag = v
+        .get("tag_name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+    let notes = v
+        .get("body")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(600)
+        .collect::<String>();
+    let published = v
+        .get("published_at")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Prefer the APK asset over `html_url`: the settings row opens it directly.
+    let url = v
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|x| {
+                    x.get("name")
+                        .and_then(|n| n.as_str())
+                        .is_some_and(|n| n.ends_with(".apk"))
+                })
+                .and_then(|x| x.get("browser_download_url"))
+                .and_then(|u| u.as_str())
+        })
+        .or_else(|| v.get("html_url").and_then(|u| u.as_str()))
+        .unwrap_or("")
+        .to_string();
+    if tag.is_empty() {
+        return Err("release has no tag".into());
+    }
+    let out = serde_json::json!({
+        "version": tag,
+        "url": url,
+        "notes": notes,
+        "published": published,
+    });
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
 // -------------------------------------------------------------- downloader
 
 static CANCEL: OnceLock<Mutex<HashMap<i64, std::sync::Arc<AtomicBool>>>> = OnceLock::new();
@@ -371,11 +432,48 @@ pub fn download_dir() -> PathBuf {
     }
 }
 
+/// Strips characters that are legal on Android but hostile to a file name.
+/// Playlist titles come from uploaders and routinely contain `/`, `:` or `?`.
+fn safe_folder(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r' | '\t' => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    // Long CJK titles are common; 60 chars keeps the whole path well under
+    // the 255-byte limit once the file name is appended.
+    let mut out: String = trimmed.chars().take(60).collect();
+    if out.is_empty() {
+        out = "未分类".into();
+    }
+    out
+}
+
+/// Directory a download belongs in: a folder per playlist when the title came
+/// from one, else the download root.
+pub fn dir_for_task(list_id: i64, list_title: &str) -> PathBuf {
+    let root = download_dir();
+    if list_id > 0 && !list_title.trim().is_empty() {
+        return root.join(safe_folder(list_title));
+    }
+    root
+}
+
+pub fn file_for_in(dir: &Path, id: i64, quality: u32, title: &str) -> String {
+    let prefix = safe_folder(title);
+    let name = if title.trim().is_empty() {
+        format!("{id}-{quality}p.mp4")
+    } else {
+        format!("{id}-{prefix}-{quality}p.mp4")
+    };
+    dir.join(name).to_string_lossy().to_string()
+}
+
 pub fn file_for(id: i64, quality: u32) -> String {
-    download_dir()
-        .join(format!("{id}-{quality}p.mp4"))
-        .to_string_lossy()
-        .to_string()
+    file_for_in(&download_dir(), id, quality, "")
 }
 
 fn find_source(d: &Detail, quality: u32) -> Option<Source> {
@@ -387,13 +485,29 @@ fn find_source(d: &Detail, quality: u32) -> Option<Source> {
 
 /// Starts a download and returns the new task as JSON. The transfer runs on a
 /// detached thread and reports progress through `library.json`.
-pub fn start_download(id: i64, quality: u32) -> Result<String, String> {
+///
+/// `list_id`/`list_title` come from the playlist the user opened the title in;
+/// when present the file lands in `<downloads>/<playlist>/` so a series stays
+/// together on disk without the user filing anything by hand.
+pub fn start_download_in(
+    id: i64,
+    quality: u32,
+    list_id: i64,
+    list_title: &str,
+) -> Result<String, String> {
     let detail_json = fetch_detail(id)?;
     let d: Detail = serde_json::from_str(&detail_json).map_err(|e| e.to_string())?;
     let src = find_source(&d, quality).ok_or_else(|| "no source".to_string())?;
-    let dir = download_dir();
+    // A title opened outside a playlist can still belong to one, so fall back to
+    // whatever the watch page itself reported.
+    let (lid, ltitle) = if list_id > 0 {
+        (list_id, list_title.to_string())
+    } else {
+        (d.list_id, d.list_title.clone())
+    };
+    let dir = dir_for_task(lid, &ltitle);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = file_for(id, src.quality);
+    let path = file_for_in(&dir, id, src.quality, &d.title);
 
     let task = DownloadTask {
         id,
@@ -405,6 +519,8 @@ pub fn start_download(id: i64, quality: u32) -> Result<String, String> {
         done: 0,
         state: "queued".into(),
         error: String::new(),
+        list_id: lid,
+        list_title: ltitle,
     };
     {
         let mut lib = library().lock().unwrap();
@@ -421,6 +537,103 @@ pub fn start_download(id: i64, quality: u32) -> Result<String, String> {
     });
 
     Ok(serde_json::to_string(&task).unwrap_or_default())
+}
+
+pub fn start_download(id: i64, quality: u32) -> Result<String, String> {
+    start_download_in(id, quality, 0, "")
+}
+
+/// Queues every title of a playlist.
+///
+/// The site has no bulk endpoint, so each title needs its own watch-page fetch
+/// to learn its file size and quality list. Those run one after another on a
+/// single thread: six parallel transfers would just fight over the connection
+/// and finish at the same time anyway, while a serial queue also keeps the
+/// files in playlist order on disk.
+pub fn start_playlist_download(list_id: i64, quality: u32) -> Result<String, String> {
+    let pl_json = fetch_playlist(list_id)?;
+    let pl: Playlist = serde_json::from_str(&pl_json).map_err(|e| e.to_string())?;
+    if pl.items.is_empty() {
+        return Err("合集为空".to_string());
+    }
+    let ids: Vec<i64> = pl.items.iter().map(|c| c.id).collect();
+    let list_title = pl.title.clone();
+
+    // Register every task up front so the downloads page shows the whole series
+    // as pending instead of growing one row at a time.
+    {
+        let mut lib = library().lock().unwrap();
+        for card in &pl.items {
+            lib.retain(|t| t.id != card.id);
+            lib.push(DownloadTask {
+                id: card.id,
+                title: card.title.clone(),
+                cover: card.cover.clone(),
+                quality: 0,
+                path: String::new(),
+                total: 0,
+                done: 0,
+                state: "queued".into(),
+                error: String::new(),
+                list_id,
+                list_title: list_title.clone(),
+            });
+        }
+    }
+    save_library();
+
+    let dir = dir_for_task(list_id, &list_title);
+    std::thread::spawn(move || {
+        for id in ids {
+            let cancel = std::sync::Arc::new(AtomicBool::new(false));
+            cancels().lock().unwrap().insert(id, cancel.clone());
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let detail = match fetch_detail(id).and_then(|j| {
+                serde_json::from_str::<Detail>(&j).map_err(|e| e.to_string())
+            }) {
+                Ok(d) => d,
+                Err(e) => {
+                    update_task(id, |t| {
+                        t.state = "error".into();
+                        t.error = e;
+                    });
+                    continue;
+                }
+            };
+            let src = match find_source(&detail, quality) {
+                Some(s) => s,
+                None => {
+                    update_task(id, |t| {
+                        t.state = "error".into();
+                        t.error = "no source".into();
+                    });
+                    continue;
+                }
+            };
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                update_task(id, |t| {
+                    t.state = "error".into();
+                    t.error = e.to_string();
+                });
+                continue;
+            }
+            let path = file_for_in(&dir, id, src.quality, &detail.title);
+            update_task(id, |t| {
+                t.quality = src.quality;
+                t.path = path.clone();
+                t.total = 0;
+                t.done = 0;
+                t.state = "queued".into();
+                t.title = detail.title.clone();
+                t.cover = detail.cover.clone();
+            });
+            run_download(id, &src.url, &path, cancel);
+        }
+    });
+
+    Ok(format!("{{\"queued\":{}}}", pl.items.len()))
 }
 
 fn update_task(id: i64, f: impl FnOnce(&mut DownloadTask)) {

@@ -11,6 +11,7 @@ import com.hanime.app.core.Playlist
 import com.hanime.app.core.Section
 import com.hanime.app.core.Settings
 import com.hanime.app.core.TagGroup
+import com.hanime.app.core.UpdateInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,21 +114,37 @@ class Repository {
         refreshDownloads()
     }
 
-    suspend fun startDownload(id: Long, quality: Int): DownloadTask = withContext(Dispatchers.IO) {
-        val t = Json.parse(Native.startDownload(id, quality)) { o ->
-            DownloadTask(
-                id = o.optLong("id"),
-                title = o.optString("title"),
-                cover = o.optString("cover"),
-                quality = o.optInt("quality"),
-                path = o.optString("path"),
-                total = o.optLong("total"),
-                done = o.optLong("done"),
-                state = o.optString("state"),
-            )
+    suspend fun startDownload(id: Long, quality: Int, listId: Long = 0, listTitle: String = ""): DownloadTask =
+        withContext(Dispatchers.IO) {
+            val t = Json.parse(Native.startDownload(id, quality, listId, listTitle)) { o ->
+                DownloadTask(
+                    id = o.optLong("id"),
+                    title = o.optString("title"),
+                    cover = o.optString("cover"),
+                    quality = o.optInt("quality"),
+                    path = o.optString("path"),
+                    total = o.optLong("total"),
+                    done = o.optLong("done"),
+                    state = o.optString("state"),
+                    listId = o.optLong("list_id"),
+                    listTitle = o.optString("list_title"),
+                )
+            }
+            refreshDownloads()
+            t
+        }
+
+    /** Queues every title of a playlist; returns how many were scheduled. */
+    suspend fun startPlaylistDownload(listId: Long, quality: Int): Int = withContext(Dispatchers.IO) {
+        val n = Json.parse(Native.startPlaylistDownload(listId, quality)) { o ->
+            o.optInt("queued", 0)
         }
         refreshDownloads()
-        t
+        n
+    }
+
+    suspend fun checkUpdate(): UpdateInfo = withContext(Dispatchers.IO) {
+        Json.update(Native.checkUpdate())
     }
 
     suspend fun cancelDownload(id: Long) = withContext(Dispatchers.IO) {

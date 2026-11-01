@@ -41,7 +41,13 @@ object Native {
 
     external fun fetchDetail(id: Long): String
 
-    external fun startDownload(id: Long, quality: Int): String
+    external fun startDownload(id: Long, quality: Int, listId: Long, listTitle: String): String
+
+    /** Queues a whole playlist; returns `{"queued":N}`. */
+    external fun startPlaylistDownload(listId: Long, quality: Int): String
+
+    /** Latest GitHub release for the in-app updater. */
+    external fun checkUpdate(): String
     external fun cancelDownload(id: Long)
     external fun removeDownload(id: Long, deleteFile: Boolean)
     external fun rescanLibrary()

@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -50,10 +51,13 @@ fun CollectionScreen(
     watched: Set<Long>,
     topInset: Int,
     onOpen: (Card) -> Unit,
+    onDownloadAll: (Long, Int) -> Unit,
     onBack: () -> Unit,
 ) {
     val state = rememberLazyListState()
     val pl: Playlist? = vm.collection
+    // Batch downloads use the same preferred quality as single ones.
+    val quality = vm.settings.value.preferredQuality
 
     Box(Modifier.fillMaxSize().background(Ink.Bg)) {
         LazyColumn(
@@ -197,6 +201,34 @@ fun CollectionScreen(
                         "全部播放",
                         fontSize = 11.sp,
                         color = Ink.AccentSoft,
+                        modifier = Modifier.padding(start = 3.dp),
+                    )
+                }
+                Spacer(Modifier.width(7.dp))
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.White.copy(alpha = 0.09f))
+                        .clickable(enabled = !vm.batchDownloading) {
+                            onDownloadAll(pl.id, quality)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (vm.batchDownloading) {
+                        LoadingDots(Modifier.size(14.dp))
+                    } else {
+                        Icon(
+                            Icons.Rounded.Download,
+                            contentDescription = null,
+                            tint = Ink.Mint,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                    Text(
+                        "全部下载",
+                        fontSize = 11.sp,
+                        color = Ink.Mint,
                         modifier = Modifier.padding(start = 3.dp),
                     )
                 }

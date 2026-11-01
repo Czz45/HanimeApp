@@ -82,6 +82,9 @@ data class DownloadTask(
     val done: Long,
     val state: String,
     val error: String = "",
+    /** Playlist this title was downloaded from; its title names the folder. */
+    val listId: Long = 0,
+    val listTitle: String = "",
 ) {
     val progress: Float
         get() = if (total <= 0L) 0f else (done.toFloat() / total).coerceIn(0f, 1f)
@@ -100,6 +103,14 @@ data class DownloadTask(
         return if (total > 0) human(done) + " / " + human(total) else human(done)
     }
 }
+
+/** Latest published release, as reported by the GitHub releases API. */
+data class UpdateInfo(
+    val version: String = "",
+    val url: String = "",
+    val notes: String = "",
+    val published: String = "",
+)
 
 data class Settings(
     val proxy: String = "",

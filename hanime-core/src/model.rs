@@ -114,4 +114,7 @@ pub struct DownloadTask {
     pub done: u64,
     pub state: String, // queued | running | paused | done | error
     pub error: String,
+    /// Playlist the title belongs to; downloads land in a folder named after it.
+    pub list_id: i64,
+    pub list_title: String,
 }

@@ -125,6 +125,36 @@ pub fn file_size(url: &str) -> Result<(u64, bool), String> {
     Ok((total, true))
 }
 
+/// GET for JSON APIs (the GitHub releases endpoint).
+///
+/// [get] is tuned for pages: it retries and rejects bodies under 512 bytes, which
+/// would throw away a perfectly good small API payload. This one sends the JSON
+/// `Accept` header and returns whatever came back.
+pub fn get_json(url: &str) -> Result<String, String> {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        let r = with_agent(|agent| {
+            let req = agent
+                .get(url)
+                .set("Accept", "application/vnd.github+json")
+                .set("User-Agent", "HanimeApp")
+                .set("X-GitHub-Api-Version", "2022-11-28");
+            match req.call() {
+                Ok(r) => r.into_string().map_err(|e| e.to_string()),
+                Err(e) => Err(format!("{e}")),
+            }
+        });
+        match r {
+            Ok(s) => return Ok(s),
+            Err(e) => last = e,
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(400 * (attempt + 1) as u64));
+        }
+    }
+    Err(last)
+}
+
 pub fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.as_bytes() {

@@ -14,8 +14,11 @@ android {
         applicationId = "com.hanime.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Bump both on every release: the in-app updater compares versionName
+        // against the latest GitHub tag, and Android refuses a same-or-higher
+        // versionCode reinstall over an existing install.
+        versionCode = 2
+        versionName = "1.0.1"
         ndk {
             // The Rust core is prebuilt per ABI and dropped into jniLibs.
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -40,6 +43,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // Settings shows the current version and the updater compares against it.
+        buildConfig = true
     }
     lint {
         checkReleaseBuilds = false

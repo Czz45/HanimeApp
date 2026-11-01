@@ -158,8 +158,7 @@ object Json {
         )
     }
 
-    fun tasks(raw: String): List<DownloadTask> {
-        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
+    fun tasks(raw: String): List<DownloadTask> {        val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
         val out = ArrayList<DownloadTask>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -174,14 +173,26 @@ object Json {
                     done = optLong(o, "done"),
                     state = optString(o, "state"),
                     error = optString(o, "error"),
+                    listId = optLong(o, "list_id"),
+                    listTitle = optString(o, "list_title"),
                 )
             )
         }
         return out
     }
 
-    fun settings(raw: String): Settings = runCatching {
-        val o = JSONObject(raw)
+    fun update(raw: String): UpdateInfo = runCatching {
+        parse(raw) { o ->
+            UpdateInfo(
+                version = optString(o, "version"),
+                url = optString(o, "url"),
+                notes = optString(o, "notes"),
+                published = optString(o, "published"),
+            )
+        }
+    }.getOrElse { UpdateInfo() }
+
+    fun settings(raw: String): Settings = runCatching {        val o = JSONObject(raw)
         Settings(
             proxy = optString(o, "proxy"),
             hideWatched = o.optBoolean("hide_watched", true),

@@ -153,17 +153,46 @@ pub extern "system" fn Java_com_hanime_app_core_Native_fetchPlaylist(
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
+pub extern "system" fn Java_com_hanime_app_core_Native_startPlaylistDownload(
     _env: JNIEnv,
     _class: JClass,
-    id: jni::sys::jlong,
+    listId: jni::sys::jlong,
     quality: jni::sys::jint,
 ) -> jstring {
-    let out = match crate::start_download(id, quality.max(0) as u32) {
+    let out = match crate::start_playlist_download(listId, quality.max(0) as u32) {
         Ok(v) => v,
         Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
     };
     to_java(&_env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_checkUpdate(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let out = match crate::check_update() {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
+    mut env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    quality: jni::sys::jint,
+    listId: jni::sys::jlong,
+    listTitle: JString,
+) -> jstring {
+    let lt = from_java(&mut env, listTitle);
+    let out = match crate::start_download_in(id, quality.max(0) as u32, listId, &lt) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
 }
 
 #[no_mangle]

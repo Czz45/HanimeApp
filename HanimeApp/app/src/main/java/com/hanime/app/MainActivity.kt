@@ -147,6 +147,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                         )
 
                         else -> SettingsScreen(
+                            vm = vm,
                             settings = settings,
                             topInset = topInset,
                             backdrop = backdrop,
@@ -157,6 +158,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             onClearWatched = { vm.clearWatched() },
                             downloadDir = vm.downloadDir(),
                             watchedCount = watched.size,
+                            appVersion = BuildConfig.VERSION_NAME,
                         )
                     }
                 }
@@ -222,7 +224,8 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             watched = watched,
                             topInset = topInset,
                             onOpen = { c -> vm.openDetail(c.id, c) },
-                            onBack = { vm.closeOverlay() },
+                            onDownloadAll = { _, q -> vm.downloadCollection(q) },
+                            onBack = { vm.back() },
                         )
                     }
                 }

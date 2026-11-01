@@ -45,6 +45,7 @@ import com.kyant.backdrop.Backdrop
  */
 @Composable
 fun SettingsScreen(
+    vm: AppViewModel,
     settings: Settings,
     topInset: Int,
     backdrop: Backdrop?,
@@ -55,6 +56,7 @@ fun SettingsScreen(
     onClearWatched: () -> Unit,
     downloadDir: String,
     watchedCount: Int,
+    appVersion: String,
 ) {
     var proxy by remember(settings.proxy) { mutableStateOf(settings.proxy) }
 
@@ -180,9 +182,19 @@ fun SettingsScreen(
                 downloadDir,
                 fontSize = 10.5.sp,
                 color = Ink.TextTertiary,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 3.dp, bottom = 14.dp),
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 3.dp, bottom = 6.dp),
+            )
+            Text(
+                "合集下载会按合集名自动建子文件夹",
+                fontSize = 10.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
             )
         }
+
+        Spacer(Modifier.height(14.dp))
+
+        UpdateGroup(vm, appVersion, backdrop)
 
         Spacer(Modifier.height(20.dp))
 
@@ -194,6 +206,104 @@ fun SettingsScreen(
             modifier = Modifier.padding(start = 6.dp, top = 4.dp),
         )
     }
+}
+
+@Composable
+private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop?) {
+    val info = vm.updateInfo
+    val hasNewer = info != null && info.version.isNotBlank() && info.version != appVersion &&
+        runCatching { compareVersions(info.version, appVersion) > 0 }.getOrDefault(false)
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    SettingsGroup("关于", backdrop) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("当前版本", fontSize = 13.sp, color = Ink.TextPrimary)
+                Text(
+                    when {
+                        vm.updateChecking -> "正在检查…"
+                        vm.updateError != null -> "检查失败：${vm.updateError}"
+                        hasNewer -> "有新版本 ${info!!.version}"
+                        info != null -> "已是最新版本"
+                        else -> "v$appVersion"
+                    },
+                    fontSize = 10.5.sp,
+                    color = when {
+                        vm.updateError != null -> Color(0xFFFF8A8A)
+                        hasNewer -> Ink.Mint
+                        else -> Ink.TextTertiary
+                    },
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+            Text(
+                "v$appVersion",
+                fontSize = 11.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(end = 10.dp),
+            )
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Ink.Accent.copy(alpha = 0.18f))
+                    .clickable(enabled = !vm.updateChecking) {
+                        if (hasNewer) {
+                            // The asset link goes straight to the APK, so hand it to
+                            // the browser: Android's package installer takes over.
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse(info!!.url),
+                                    )
+                                )
+                            }
+                        } else {
+                            vm.checkForUpdate()
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    when {
+                        vm.updateChecking -> "检查中"
+                        hasNewer -> "去下载"
+                        else -> "检查更新"
+                    },
+                    fontSize = 11.sp,
+                    color = Ink.AccentSoft,
+                )
+            }
+        }
+        if (hasNewer && info!!.notes.isNotBlank()) {
+            Divider()
+            Text(
+                info.notes.trim().take(300),
+                fontSize = 10.sp,
+                lineHeight = 15.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
+/** Numeric, segment-wise compare so 1.0.10 sorts above 1.0.9. */
+private fun compareVersions(a: String, b: String): Int {
+    val pa = a.split('.').map { it.toIntOrNull() ?: 0 }
+    val pb = b.split('.').map { it.toIntOrNull() ?: 0 }
+    for (i in 0 until maxOf(pa.size, pb.size)) {
+        val x = pa.getOrElse(i) { 0 }
+        val y = pb.getOrElse(i) { 0 }
+        if (x != y) return x - y
+    }
+    return 0
 }
 
 @Composable

@@ -133,6 +133,18 @@ class AppViewModel : ViewModel() {
     var collectionError by mutableStateOf<String?>(null)
         private set
 
+    /** True while a batch (whole-collection) download is being queued. */
+    var batchDownloading by mutableStateOf(false)
+        private set
+
+    // ---- update checker --------------------------------------------------
+    var updateChecking by mutableStateOf(false)
+        private set
+    var updateInfo by mutableStateOf<com.hanime.app.core.UpdateInfo?>(null)
+        private set
+    var updateError by mutableStateOf<String?>(null)
+        private set
+
     // ---- detail ----------------------------------------------------------
     var detail by mutableStateOf<Detail?>(null)
         private set
@@ -423,10 +435,25 @@ class AppViewModel : ViewModel() {
     // ---- downloads -------------------------------------------------------
 
     fun download(quality: Int) {
-        val id = detail?.id ?: return
+        val d = detail ?: return
         viewModelScope.launch {
-            runCatching { repo.startDownload(id, quality) }
+            // Passing the playlist through is what makes the file land in the
+            // series folder instead of a flat downloads directory.
+            runCatching { repo.startDownload(d.id, quality, d.listId, d.listTitle) }
                 .onFailure { notice = it.userMessage() }
+        }
+    }
+
+    /** Downloads a whole collection, one title after another. */
+    fun downloadCollection(quality: Int) {
+        val pl = collection ?: return
+        if (pl.items.isEmpty()) return
+        batchDownloading = true
+        viewModelScope.launch {
+            runCatching { repo.startPlaylistDownload(pl.id, quality) }
+                .onSuccess { notice = "已加入 $it 个下载任务" }
+                .onFailure { notice = it.userMessage() }
+            batchDownloading = false
         }
     }
 
@@ -467,6 +494,19 @@ class AppViewModel : ViewModel() {
     fun clearWatched() = viewModelScope.launch { repo.clearWatched() }
 
     fun downloadDir(): String = repo.downloadDir()
+
+    /** Asks GitHub for the newest release; the settings row compares it to BuildConfig. */
+    fun checkForUpdate() {
+        if (updateChecking) return
+        updateChecking = true
+        updateError = null
+        viewModelScope.launch {
+            runCatching { repo.checkUpdate() }
+                .onSuccess { updateInfo = it }
+                .onFailure { updateError = it.userMessage() }
+            updateChecking = false
+        }
+    }
 
     fun clearNotice() {
         notice = null
