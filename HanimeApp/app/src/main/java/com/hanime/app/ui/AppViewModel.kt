@@ -428,27 +428,30 @@ class AppViewModel : ViewModel() {
      */
     private fun loadRandomReels() {
         reelJob = viewModelScope.launch {
-            val batch = mutableListOf<Card>()
+            // One listing request gives a whole shuffled batch. Sampling bare ids in
+            // a loop was the earlier approach and it made random mode feel broken:
+            // most ids on this site no longer resolve, so six cards cost ~30 fetches.
+            val lp = runCatching { repo.randomCards(reelGenre, RANDOM_BATCH) }.getOrNull()
+            if (lp == null) {
+                reelError = "没抽到可播放的作品"
+                reelLoading = false
+                return@launch
+            }
             val hide = settings.value.hideWatched
             val w = repo.watched.value
-            var lastError: String? = null
-            // A handful per batch keeps the first swipe fast; more load as the
-            // user nears the end.
-            while (batch.size < RANDOM_BATCH) {
-                val d = runCatching { repo.randomDetail(reelGenre) }
-                    .onFailure { lastError = it.userMessage() }
-                    .getOrNull() ?: break
-                if (hide && d.id in w) continue
-                if (reelCards.any { it.id == d.id } || batch.any { it.id == d.id }) continue
-                batch.add(d.toCard())
+            val seen = reelCards.mapTo(mutableSetOf()) { it.id }
+            val fresh = lp.items.filter { card ->
+                (!hide || card.id !in w) && seen.add(card.id)
             }
-            if (batch.isEmpty()) {
-                reelError = lastError ?: "没抽到可播放的作品"
-            } else {
-                reelCards.addAll(batch)
-                prefetchReels(reelCards.take(2).map { it.id })
+            if (fresh.isEmpty()) {
+                // A page can come back fully watched; try again rather than stall.
+                reelLoading = false
+                loadRandomReels()
+                return@launch
             }
-            reelHasNext = batch.isNotEmpty()
+            reelCards.addAll(fresh)
+            prefetchReels(reelCards.take(2).map { it.id })
+            reelHasNext = true
             reelLoading = false
         }
     }

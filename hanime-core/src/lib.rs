@@ -335,7 +335,7 @@ pub fn fetch_list(
     for c in &lp.items {
         note_id(c.id);
     }
-    *max_page_cell().lock().unwrap() = lp.max_page.max(1);
+    note_max_page(genre, lp.max_page);
     serde_json::to_string(&lp).map_err(|e| e.to_string())
 }
 
@@ -367,7 +367,7 @@ pub fn fetch_search_filtered(
     for c in &lp.items {
         note_id(c.id);
     }
-    *max_page_cell().lock().unwrap() = lp.max_page.max(1);
+    note_max_page(genre, lp.max_page);
     serde_json::to_string(&lp).map_err(|e| e.to_string())
 }
 
@@ -485,21 +485,38 @@ pub fn random_id() -> i64 {
     RANDOM_ID_MIN + (next_rand(&mut st) % span) as i64
 }
 
-/// Picks random ids until one resolves to a playable watch page.
+/// A uniform draw from the id space.
 ///
-/// Sampling the id space directly is the cheapest random the site allows, but a
-/// large share of ids no longer answer: deleted uploads 302 to another domain and
-/// gated ones return 403, so roughly two in five samples miss. `tries` bounds
-/// that; a miss costs one request and nothing else.
+/// Kept as a catalogue-level randomiser for callers that do not need a playable
+/// page back. Note that roughly four in five ids no longer answer — deleted
+/// uploads 302 off-site and gated ones 403 — so anything that needs a *video*
+/// should sample a listing page instead (see `random_detail_of_genre`).
 pub fn random_detail(tries: u32) -> Result<String, String> {
     random_detail_in("", tries)
 }
 
-/// Largest page any listing has reported, used to keep genre sampling in range.
-static MAX_PAGE_SEEN: OnceLock<Mutex<u32>> = OnceLock::new();
+/// Largest page each genre has reported.
+///
+/// Per genre, not one global cell: a single shared value meant sampling 裏番
+/// after visiting 泡麵番 (which only has 2 pages) rolled pages 1-2 forever, so
+/// the result looked barely random at all.
+static MAX_PAGE_SEEN: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
 
-fn max_page_cell() -> &'static Mutex<u32> {
-    MAX_PAGE_SEEN.get_or_init(|| Mutex::new(1))
+fn max_page_map() -> &'static Mutex<HashMap<String, u32>> {
+    MAX_PAGE_SEEN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records the page count a listing reported for `genre`.
+fn note_max_page(genre: &str, max_page: u32) {
+    let key = if genre.trim().is_empty() { "全部" } else { genre.trim() };
+    let mut g = max_page_map().lock().unwrap();
+    let slot = g.entry(key.to_string()).or_insert(1);
+    *slot = (*slot).max(max_page.max(1));
+}
+
+fn max_page_for(genre: &str) -> u32 {
+    let key = if genre.trim().is_empty() { "全部" } else { genre.trim() };
+    max_page_map().lock().unwrap().get(key).copied().unwrap_or(1)
 }
 
 /// Random title, optionally restricted to one category.
@@ -510,20 +527,13 @@ fn max_page_cell() -> &'static Mutex<u32> {
 /// and thrown away. Those go through a random listing page instead, where every
 /// card is already the right category.
 pub fn random_detail_in(genre: &str, tries: u32) -> Result<String, String> {
-    let want = genre.trim();
-    if !want.is_empty() && want != "全部" {
-        return random_detail_of_genre(want, tries);
-    }
-
-    let mut last = String::from("no random id resolved");
-    for _ in 0..tries.max(1) {
-        let id = random_id();
-        match fetch_detail(id) {
-            Ok(json) => return Ok(json),
-            Err(e) => last = e,
-        }
-    }
-    Err(last)
+    // Both cases go through the listing. Sampling bare ids looks tempting — the
+    // number in `watch?v=` is a contiguous catalogue — but measured on this site
+    // only about one in five ids still answers a playable page (deleted uploads
+    // 302 off-site, gated ones 403), so a batch of six ran through ~30 requests and
+    // the feed looked frozen. A random listing page always yields playable cards
+    // for two requests, and random page + random card is still a uniform draw.
+    random_detail_of_genre(genre.trim(), tries)
 }
 
 /// Rolls a random page of `genre` and picks one of its cards.
@@ -535,7 +545,7 @@ fn random_detail_of_genre(genre: &str, tries: u32) -> Result<String, String> {
     let mut st = seed();
     let mut last = String::from("no cards on the sampled page");
     for _ in 0..tries.max(1) {
-        let hi = (*max_page_cell().lock().unwrap()).max(1) as u64;
+        let hi = max_page_for(genre).max(1) as u64;
         let page = 1 + (next_rand(&mut st) % hi) as u32;
         let html = match net::get(&url_for_list(genre, "最新上市", "", "", page)) {
             Ok(v) => v,
@@ -551,10 +561,7 @@ fn random_detail_of_genre(genre: &str, tries: u32) -> Result<String, String> {
                 continue;
             }
         };
-        {
-            let mut g = max_page_cell().lock().unwrap();
-            *g = lp.max_page.max(1);
-        }
+        note_max_page(genre, lp.max_page);
         if lp.items.is_empty() {
             continue;
         }
@@ -563,6 +570,70 @@ fn random_detail_of_genre(genre: &str, tries: u32) -> Result<String, String> {
             Ok(json) => return Ok(json),
             Err(e) => last = e,
         }
+    }
+    Err(last)
+}
+
+/// A batch of cards drawn from a random listing page.
+///
+/// One request returns several titles, which is what the swipe feed needs: the
+/// per-id path cost a page fetch per clip and still missed four times out of five.
+/// Picking a uniform page and then uniform cards on it is the same distribution as
+/// sampling the catalogue, at a fraction of the traffic.
+pub fn random_cards(genre: &str, count: u32) -> Result<String, String> {
+    let want = genre.trim();
+    let count = count.max(1);
+    let mut st = seed();
+    let mut last = String::from("no cards on the sampled page");
+    // Learn the depth before rolling. Out-of-range pages just echo the page number
+    // they were asked for, so probing deep teaches us nothing; page 1 always
+    // reports the genre's real `max_page`, and without it the first random call of
+    // a session was pinned to page 1 and looked barely random.
+    if max_page_for(want) <= 1 {
+        if let Ok(html) = net::get(&url_for_list(want, "最新上市", "", "", 1)) {
+            if let Ok(lp) = html::parse_list(&html, 1) {
+                note_max_page(want, lp.max_page);
+            }
+        }
+    }
+    for _ in 0..4u32 {
+        let hi = max_page_for(want).max(1) as u64;
+        let page = 1 + (next_rand(&mut st) % hi) as u32;
+        let html = match net::get(&url_for_list(want, "最新上市", "", "", page)) {
+            Ok(v) => v,
+            Err(e) => {
+                last = e;
+                continue;
+            }
+        };
+        let lp = match html::parse_list(&html, page) {
+            Ok(v) => v,
+            Err(e) => {
+                last = e;
+                continue;
+            }
+        };
+        note_max_page(want, lp.max_page);
+        if lp.items.is_empty() {
+            continue;
+        }
+        let mut items = lp.items;
+        // Fisher-Yates over the page so a batch is not just the first N cards.
+        for i in (1..items.len()).rev() {
+            let j = (next_rand(&mut st) % (i as u64 + 1)) as usize;
+            items.swap(i, j);
+        }
+        for c in &items {
+            note_id(c.id);
+        }
+        items.truncate(count as usize);
+        let page = ListPage {
+            has_next: true,
+            max_page: lp.max_page,
+            page,
+            items,
+        };
+        return serde_json::to_string(&page).map_err(|e| e.to_string());
     }
     Err(last)
 }

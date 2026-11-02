@@ -79,6 +79,21 @@ pub extern "system" fn Java_com_hanime_app_core_Native_fetchSearch(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchRandomCards(
+    mut env: JNIEnv,
+    _class: JClass,
+    genre: JString,
+    count: jni::sys::jint,
+) -> jstring {
+    let g = from_java(&mut env, genre);
+    let out = match crate::random_cards(&g, count.max(1) as u32) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_fetchDetail(
     _env: JNIEnv,
     _class: JClass,

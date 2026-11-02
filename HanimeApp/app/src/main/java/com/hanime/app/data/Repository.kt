@@ -107,6 +107,15 @@ class Repository {
      * The catalogue is a contiguous integer id space, so the core samples ids and
      * retries on misses (deleted uploads 302 off-site, others have no source).
      */
+    /**
+     * A shuffled batch from one random listing page.
+     *
+     * Much cheaper than [randomDetail] in a loop: that sampled bare ids, which miss
+     * ~80% of the time on this site, so a six-item batch meant ~30 requests.
+     */
+    suspend fun randomCards(genre: String, count: Int = 6): ListPage =
+        withContext(Dispatchers.IO) { Json.listPage(Native.fetchRandomCards(genre, count)) }
+
     suspend fun randomDetail(genre: String, tries: Int = 24): Detail = withContext(Dispatchers.IO) {
         Json.detail(Native.fetchRandomDetail(genre, tries))
     }

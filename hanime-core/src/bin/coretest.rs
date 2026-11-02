@@ -49,6 +49,25 @@ fn main() {
                 Err(e) => println!("ERR {e}"),
             }
         }
+        "rand" => {
+            // Exercises the swipe-feed sampler: `rand <genre> <count>`.
+            let genre = args.get(1).cloned().unwrap_or_default();
+            let n: u32 = args
+                .get(2)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6);
+            match hanime_core::random_cards(&genre, n) {
+                Ok(js) => {
+                    let lp: hanime_core::model::ListPage =
+                        serde_json::from_str(&js).unwrap_or_default();
+                    println!("count {} page {}/{}", lp.items.len(), lp.page, lp.max_page);
+                    for c in &lp.items {
+                        println!("  {} {} | {}", c.id, c.dur, c.title);
+                    }
+                }
+                Err(e) => println!("ERR {e}"),
+            }
+        }
         "lf" => {
             // Parse an arbitrary saved list page, e.g. a genre other than 裏番
             // (those use a different card template on the live site).

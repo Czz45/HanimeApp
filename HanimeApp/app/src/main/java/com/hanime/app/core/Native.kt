@@ -42,6 +42,9 @@ object Native {
     external fun fetchDetail(id: Long): String
 
     /** Rolls random catalogue ids until one resolves and belongs to [genre]. */
+    /** One request, several cards: the swipe feed needs a batch, not a video. */
+    external fun fetchRandomCards(genre: String, count: Int): String
+
     external fun fetchRandomDetail(genre: String, tries: Int): String
 
     external fun startDownload(id: Long, quality: Int, listId: Long, listTitle: String): String
