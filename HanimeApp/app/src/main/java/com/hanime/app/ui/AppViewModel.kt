@@ -307,11 +307,21 @@ class AppViewModel : ViewModel() {
     val reelCards = mutableStateListOf<Card>()
     var reelGenre by mutableStateOf("全部")
         private set
+    /**
+     * Random mode.
+     *
+     * The site has no random sort, so this samples whole result pages at random
+     * instead: one page is ~40 titles, which already makes the order feel
+     * arbitrary, and it needs no per-item requests.
+     */
+    var reelRandom by mutableStateOf(false)
+        private set
     var reelLoading by mutableStateOf(false)
         private set
     var reelError by mutableStateOf<String?>(null)
         private set
     private var reelPage = 1
+    private var reelMaxPage = 1
     private var reelHasNext = false
     private var reelJob: Job? = null
 
@@ -321,52 +331,80 @@ class AppViewModel : ViewModel() {
         loadReels(reset = true)
     }
 
+    fun chooseReelRandom(on: Boolean) {
+        if (reelRandom == on) return
+        reelRandom = on
+        loadReels(reset = true)
+    }
+
     fun chooseReelGenre(genre: String) {
         if (reelGenre == genre) return
         reelGenre = genre
         loadReels(reset = true)
     }
 
+    fun toggleReelRandom() {
+        reelRandom = !reelRandom
+        loadReels(reset = true)
+    }
+
     /**
-     * Pulls a page for the swipe feed.
+     * Pulls a batch for the swipe feed.
      *
-     * Same `/search` endpoint as the browse grid so every genre works and paging
-     * continues past the first page; the reels list is kept separate from [feed]
-     * because the two have independent filters.
+     * Sequential mode walks pages 1..n of the current genre. Random mode instead
+     * jumps to a page picked uniformly from the genre's real page range, read from
+     * the first response; results are then shuffled inside the batch so two open
+     * sessions do not start from the same title.
      */
     fun loadReels(reset: Boolean = false) {
         if (reelJob?.isActive == true) return
-        if (!reset && !reelHasNext) return
-        val page = if (reset) 1 else reelPage + 1
+        if (!reset && !reelMayLoadMore()) return
         reelLoading = true
         reelError = null
-        if (reset) reelCards.clear()
+        if (reset) {
+            reelCards.clear()
+            reelPage = 0
+            reelMaxPage = 1
+        }
+        val nextPage = if (reelRandom) {
+            (1..reelMaxPage.coerceAtLeast(1)).random()
+        } else {
+            reelPage + 1
+        }
         reelJob = viewModelScope.launch {
             runCatching {
                 repo.searchFiltered(
                     query = "",
                     genre = reelGenre,
+                    // Random mode pins the sort to "newest" too: the site returns the
+                    // same fixed ordering for every sort, so randomising the page is
+                    // what actually varies the content.
                     sort = "最新上市",
                     date = "",
                     duration = "",
                     tags = emptyList(),
                     broad = false,
-                    page = page,
+                    page = nextPage,
                 )
             }.onSuccess { lp ->
+                reelMaxPage = lp.maxPage.coerceAtLeast(1)
+                reelPage = nextPage
                 val hide = settings.value.hideWatched
                 val w = repo.watched.value
-                val add = if (hide) lp.items.filter { it.id !in w } else lp.items
+                val batch = if (hide) lp.items.filter { it.id !in w } else lp.items
                 val seen = reelCards.mapTo(mutableSetOf()) { it.id }
-                reelCards.addAll(add.filter { seen.add(it.id) })
-                reelPage = page
+                val fresh = batch.filter { seen.add(it.id) }
+                // Shuffle only in random mode: sequential browsing should keep the
+                // upload order the list is sorted by.
+                reelCards.addAll(if (reelRandom) fresh.shuffled() else fresh)
                 reelHasNext = lp.hasNext
-                // Warm the first two so the very first swipe is instant.
                 prefetchReels(reelCards.take(2).map { it.id })
             }.onFailure { reelError = it.userMessage() }
             reelLoading = false
         }
     }
+
+    private fun reelMayLoadMore(): Boolean = reelRandom || reelHasNext
 
     fun closeReels() {
         if (route is Route.Reels) route = Route.Tabs

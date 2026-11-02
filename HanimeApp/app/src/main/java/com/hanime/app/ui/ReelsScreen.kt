@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Icon
@@ -49,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -174,6 +178,31 @@ fun ReelsScreen(
                 )
             }
             Spacer(Modifier.weight(1f))
+            // Random toggle sits with the counter: it changes what the whole feed
+            // contains, so it belongs with the feed-level controls, not per item.
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.42f))
+                    .clickable { vm.toggleReelRandom() }
+                    .padding(horizontal = 11.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Rounded.Shuffle,
+                    contentDescription = if (vm.reelRandom) "关闭随机" else "随机",
+                    tint = if (vm.reelRandom) Ink.Accent else Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    if (vm.reelRandom) "随机" else "顺序",
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (vm.reelRandom) Ink.Accent else Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+            }
+            Spacer(Modifier.width(10.dp))
             Text(
                 if (cards.isEmpty()) "" else "${pager.currentPage + 1} / ${cards.size}",
                 fontSize = 11.sp,
@@ -213,6 +242,21 @@ fun ReelsScreen(
     }
 }
 
+/**
+ * Bridge between the player and the timeline drawn by [ReelPage].
+ *
+ * The scrubber has to sit above the title block, but the player lives inside the
+ * video layer, so the two communicate through this holder instead of lifting the
+ * whole ExoPlayer up into the page composable.
+ */
+private class ReelControls {
+    var position by mutableStateOf(0L)
+    var duration by mutableStateOf(0L)
+    var playing by mutableStateOf(false)
+    var seekTo: ((Long) -> Unit)? = null
+    var togglePlay: (() -> Unit)? = null
+}
+
 @Composable
 private fun ReelPage(
     vm: AppViewModel,
@@ -226,6 +270,7 @@ private fun ReelPage(
     var detail by remember(card.id) { mutableStateOf<Detail?>(null) }
     var failed by remember(card.id) { mutableStateOf(false) }
     var showChrome by remember(card.id) { mutableStateOf(true) }
+    val controls = remember(card.id) { ReelControls() }
 
     LaunchedEffect(card.id) {
         // Usually already warm from the prefetch; this await resolves instantly then.
@@ -257,6 +302,7 @@ private fun ReelPage(
                 source = source,
                 active = active,
                 muted = muted,
+                controls = controls,
                 onClick = { showChrome = !showChrome },
             )
         }
@@ -288,6 +334,13 @@ private fun ReelPage(
                 .windowInsetsPadding(WindowInsets.systemBars)
                 .padding(start = 16.dp, end = 78.dp, bottom = 18.dp),
         ) {
+            if (controls.duration > 0) {
+                ReelScrubber(
+                    position = controls.position,
+                    duration = controls.duration,
+                    onSeek = { controls.seekTo?.invoke(it) },
+                )
+            }
             Text(
                 detail?.cnTitle?.takeIf { it.isNotBlank() && it != detail?.title } ?: card.title,
                 fontSize = 14.sp,
@@ -384,6 +437,93 @@ private fun MuteButton(muted: Boolean, onClick: () -> Unit) {
     }
 }
 
+
+/**
+ * Thin draggable timeline.
+ *
+ * A Material Slider would be 40dp tall and cover the title; this is a 14dp touch
+ * band with a 2.5dp track so it can sit directly above the caption. Drag anywhere
+ * on the band, the thumb follows the finger and the seek is committed on release.
+ */
+@Composable
+private fun ReelScrubber(
+    position: Long,
+    duration: Long,
+    onSeek: (Long) -> Unit,
+) {
+    var dragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableStateOf(0f) }
+
+    val fraction = if (dragging) {
+        dragFraction
+    } else if (duration > 0) {
+        (position.toFloat() / duration).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxWidth()
+                .height(14.dp)
+                .pointerInput(duration) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            dragging = true
+                            dragFraction = (it.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            onSeek((dragFraction * duration).toLong())
+                        },
+                        onDragCancel = { dragging = false },
+                    ) { change, _ ->
+                        change.consume()
+                        dragFraction = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                    }
+                }
+                .pointerInput(duration) {
+                    detectTapGestures { offset ->
+                        val f = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        onSeek((f * duration).toLong())
+                    }
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(if (dragging) 4.dp else 2.5.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.24f))
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth(fraction)
+                    .height(if (dragging) 4.dp else 2.5.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.92f))
+            )
+            if (dragging) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(14.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(9.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * The one player a page owns.
  *
@@ -396,6 +536,7 @@ private fun ReelVideo(
     source: Source,
     active: Boolean,
     muted: Boolean,
+    controls: ReelControls,
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -439,6 +580,32 @@ private fun ReelVideo(
         } else {
             player.playWhenReady = false
             player.pause()
+        }
+    }
+
+    // Expose the transport to the page so its scrubber can drive this player.
+    DisposableEffect(player) {
+        controls.seekTo = { ms ->
+            player.seekTo(ms.coerceIn(0L, player.duration.coerceAtLeast(0L)))
+            player.play()
+        }
+        controls.togglePlay = { if (player.isPlaying) player.pause() else player.play() }
+        onDispose {
+            controls.seekTo = null
+            controls.togglePlay = null
+        }
+    }
+
+    // 200 ms is smooth enough for a thin progress bar and cheap next to per-frame
+    // callbacks; only the visible page polls, so the cost stays bounded.
+    LaunchedEffect(player, active) {
+        while (true) {
+            if (active) {
+                controls.position = player.currentPosition.coerceAtLeast(0L)
+                controls.duration = player.duration.coerceAtLeast(0L)
+                controls.playing = player.isPlaying
+            }
+            delay(200)
         }
     }
 

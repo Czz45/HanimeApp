@@ -17,8 +17,8 @@ android {
         // Bump both on every release: the in-app updater compares versionName
         // against the latest GitHub tag, and Android refuses a same-or-higher
         // versionCode reinstall over an existing install.
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 10
+        versionName = "1.0.9"
         ndk {
             // The Rust core is prebuilt per ABI and dropped into jniLibs.
             abiFilters += listOf("arm64-v8a", "x86_64")
