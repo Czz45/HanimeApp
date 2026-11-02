@@ -89,8 +89,10 @@ fun ReelsScreen(
     onBack: () -> Unit,
 ) {
     val cards = vm.reelCards
+    // Resume where the user left off: a detail sheet tears this screen down, and
+    // the VM holds the page so coming back does not restart at clip one.
     val pager = rememberPagerState(
-        initialPage = 0,
+        initialPage = vm.reelIndex.coerceIn(0, (cards.size - 1).coerceAtLeast(0)),
         pageCount = { cards.size },
     )
     var muted by remember { mutableStateOf(false) }
@@ -99,6 +101,7 @@ fun ReelsScreen(
     // further ahead would compete with the clip that is playing now. The last two
     // pages also pull the next batch so the feed never dead-ends.
     LaunchedEffect(pager.currentPage, cards.size) {
+        vm.rememberReelIndex(pager.currentPage)
         if (cards.isEmpty()) return@LaunchedEffect
         val from = (pager.currentPage + 1).coerceAtMost(cards.lastIndex)
         val to = (pager.currentPage + 2).coerceAtMost(cards.lastIndex)
@@ -203,8 +206,15 @@ fun ReelsScreen(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            // The catalogue id is the actual proof of randomness: random mode jumps
+            // all over this number, sequential mode walks it down.
             Text(
-                if (cards.isEmpty()) "" else "${pager.currentPage + 1} / ${cards.size}",
+                if (cards.isEmpty()) {
+                    ""
+                } else {
+                    val id = cards.getOrNull(pager.currentPage)?.id
+                    "${pager.currentPage + 1}/${cards.size} · #$id"
+                },
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.7f),
             )
@@ -303,13 +313,69 @@ private fun ReelPage(
                 active = active,
                 muted = muted,
                 controls = controls,
-                onClick = { showChrome = !showChrome },
             )
         }
 
         if (failed) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("加载失败", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f))
+            }
+        }
+
+        // Gesture layer above the video but under everything interactive.
+        //
+        // Vertical swipes are deliberately left to the pager — brightness/volume on
+        // the vertical axis would fight page changes. Horizontal drag seeks, which
+        // nothing else claims, and the scrubber above reflects it live.
+        val seekSpan = (vm.settings.value.seekSeconds * 1000L).coerceAtLeast(10_000L)
+        var dragTarget by remember(card.id) { mutableStateOf<Long?>(null) }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(card.id, controls.duration) {
+                    detectTapGestures(
+                        onTap = { showChrome = !showChrome },
+                        onDoubleTap = { controls.togglePlay?.invoke() },
+                    )
+                }
+                .pointerInput(card.id, controls.duration, seekSpan) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragTarget = controls.position },
+                        onDragEnd = {
+                            dragTarget?.let { controls.seekTo?.invoke(it) }
+                            dragTarget = null
+                        },
+                        onDragCancel = { dragTarget = null },
+                    ) { change, delta ->
+                        change.consume()
+                        val base = dragTarget ?: controls.position
+                        val d = controls.duration
+                        if (d > 0) {
+                            // Same mapping as the full-screen player: one full width
+                            // covers `seekSeconds`, so the feel is consistent.
+                            val step = (delta / size.width.toFloat() * seekSpan).toLong()
+                            dragTarget = (base + step).coerceIn(0L, d)
+                        }
+                    }
+                },
+        ) {
+            dragTarget?.let { target ->
+                if (controls.duration > 0) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 96.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    ) {
+                        Text(
+                            "${fmtReel(target)} / ${fmtReel(controls.duration)}",
+                            fontSize = 11.sp,
+                            color = Color.White,
+                        )
+                    }
+                }
             }
         }
 
@@ -394,23 +460,23 @@ private fun ReelPage(
             }
         }
 
-        // Bookmark + mute, stacked on the right so they never cover the frame centre.
-        AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
-            Column(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                FavoriteButton(
-                    active = vm.isFavorite(card.id),
-                    onClick = { vm.toggleFavorite(card) },
-                    size = 38,
-                )
-                MuteButton(muted = muted, onClick = onToggleMute)
-            }
+        // Bookmark + mute stay put while the caption toggles: they are actions, not
+        // decoration, and hiding the only way to save a video is a bug, not chrome.
+        Column(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            FavoriteButton(
+                active = vm.isFavorite(card.id),
+                onClick = { vm.toggleFavorite(card) },
+                size = 38,
+            )
+            MuteButton(muted = muted, onClick = onToggleMute)
         }
+
     }
 }
 
@@ -537,7 +603,6 @@ private fun ReelVideo(
     active: Boolean,
     muted: Boolean,
     controls: ReelControls,
-    onClick: () -> Unit,
 ) {
     val context = LocalContext.current
     var videoRatio by remember(source.url) { mutableStateOf(0f) }
@@ -636,18 +701,6 @@ private fun ReelVideo(
                 Modifier.fillMaxWidth().aspectRatio(videoRatio)
             },
         )
-        // Tap anywhere toggles transport; a very small target would fight the pager.
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) {
-                    if (player.isPlaying) player.pause() else player.play()
-                    onClick()
-                }
-        )
         if (buffering && active) {
             LoadingDots(Modifier.align(Alignment.Center))
         } else if (!playing && active) {
@@ -667,4 +720,10 @@ private fun ReelVideo(
             }
         }
     }
+}
+
+/** Short clock for the feed; reels are minutes long, so hours never show. */
+private fun fmtReel(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return "%d:%02d".format(total / 60, total % 60)
 }

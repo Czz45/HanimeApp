@@ -329,6 +329,20 @@ class AppViewModel : ViewModel() {
     private var reelHasNext = false
     private var reelJob: Job? = null
 
+    /**
+     * Swipe position, kept outside the composable.
+     *
+     * Reels is disposed while a title sheet is open, so the pager has to rebuild
+     * from here — otherwise returning from a detail page restarts the stack at
+     * the first clip.
+     */
+    var reelIndex by mutableStateOf(0)
+        private set
+
+    fun rememberReelIndex(index: Int) {
+        reelIndex = index.coerceAtLeast(0)
+    }
+
     fun openReels(genre: String = "全部") {
         reelGenre = genre
         route = Route.Reels(genre)
@@ -695,6 +709,10 @@ class AppViewModel : ViewModel() {
         detailOrigin = when (val r = route) {
             is Route.Search -> Route.Search
             is Route.Collection -> Route.Collection(r.id, r.title)
+            // Reels is a full-screen destination of its own: without this the back
+            // button dropped the user on the tab feed and lost their place in the
+            // swipe stack entirely.
+            is Route.Reels -> Route.Reels(r.genre)
             else -> Route.Tabs
         }
         route = Route.Info(id, seed)
