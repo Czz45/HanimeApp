@@ -66,7 +66,32 @@ fn apply_headers(req: ureq::Request) -> ureq::Request {
         .set("Sec-Fetch-User", "?1")
 }
 
+/// A mirror of the same catalogue: `watch?v=<id>` resolves to the identical
+/// upload, so a request can be replayed against it verbatim. It exists for the
+/// audience the primary domain geo-blocks, which means it is also the natural
+/// fallback when the primary returns a block page.
+pub const MIRROR_HOST: &str = "hanime1.site";
+const PRIMARY_HOST: &str = "hanime1.me";
+
+fn mirror_of(url: &str) -> Option<String> {
+    if url.contains(PRIMARY_HOST) {
+        Some(url.replace(PRIMARY_HOST, MIRROR_HOST))
+    } else {
+        None
+    }
+}
+
 pub fn get(url: &str) -> Result<String, String> {
+    match get_once(url) {
+        Ok(s) => Ok(s),
+        Err(primary) => match mirror_of(url) {
+            Some(m) => get_once(&m).map_err(|mirror| format!("{primary}; mirror: {mirror}")),
+            None => Err(primary),
+        },
+    }
+}
+
+fn get_once(url: &str) -> Result<String, String> {
     let mut last = String::new();
     for attempt in 0..3 {
         let r = with_agent(|agent| {

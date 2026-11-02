@@ -641,6 +641,14 @@ pub fn random_cards(genre: &str, count: u32) -> Result<String, String> {
 pub fn fetch_detail(id: i64) -> Result<String, String> {
     let url = format!("{BASE}/watch?v={id}");
     let html = net::get(&url)?;
+    // Delisted uploads do not 404: the site answers 302 to a *different*
+    // catalogue (javchu.com) whose pages reuse the same numeric ids but hold
+    // unrelated films. Parsing that body would silently return someone else's
+    // video under this id, so a page that no longer belongs to this site is
+    // reported as missing instead.
+    if !html.contains(net::MIRROR_HOST) && !html.contains("hanime1.me") {
+        return Err("video is no longer available".into());
+    }
     let mut d = html::parse_watch(&html, id)?;
     d.related.retain(|c| c.id != id);
     note_id(id);
