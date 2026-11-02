@@ -51,6 +51,18 @@ val DURATIONS = listOf(
 /** Label shown on a chip for an empty filter value. */
 fun filterLabel(value: String, fallback: String): String = value.ifBlank { fallback }
 
+/**
+ * Two shapes for the first tab.
+ *
+ * [Home] is the editorial board: the site's own horizontal rows (最新上市, 他們在看…)
+ * which have no sort parameters at all. [Browse] is the `/search` grid, where
+ * every genre — including 全部 — can be sorted and filtered. They used to be one
+ * screen that silently swapped shape based on the sort value, which made sorting
+ * under 全部 impossible: any sort change looked like it did nothing because the
+ * home rows ignore `sort=`.
+ */
+enum class FeedMode { Home, Browse }
+
 /** Where the floating player / detail sheet sits above the tab content. */
 sealed interface Route {
     data object Tabs : Route
@@ -105,8 +117,11 @@ class AppViewModel : ViewModel() {
 
     /** Sorting the flat list is the only mode that paginates. */
     val isGridMode: Boolean
-        get() = genre != "全部" || sort != "最新上市" ||
-            date.isNotBlank() || duration.isNotBlank() || tags.isNotEmpty()
+        get() = mode == FeedMode.Browse
+
+    /** Editorial rows vs. the sortable grid. */
+    var mode by mutableStateOf(FeedMode.Home)
+        private set
 
     // ---- tag picker ------------------------------------------------------
     var tagGroups by mutableStateOf<List<com.hanime.app.core.TagGroup>>(emptyList())
@@ -188,31 +203,53 @@ class AppViewModel : ViewModel() {
         tab = index
     }
 
+    /**
+     * Switches between the editorial board and the sortable grid.
+     *
+     * Switching to [FeedMode.Browse] keeps whatever genre/sort is already chosen, so
+     * tapping 分类 while 裏番 is selected lands on that genre's grid instead of
+     * resetting the user's context.
+     */
+    fun chooseMode(value: FeedMode) {
+        if (mode == value) return
+        mode = value
+        refreshFeed()
+    }
+
     fun chooseGenre(value: String) {
-        if (genre == value) return
+        // Picking a concrete genre is an explicit request to browse it, so leave the
+        // editorial board even if the user never touched the mode switch.
+        if (mode == FeedMode.Home && value != "全部") mode = FeedMode.Browse
+        if (genre == value && mode == FeedMode.Browse) return
         genre = value
         refreshFeed()
     }
 
     fun chooseSort(value: String) {
-        if (sort == value) return
+        // Sorting only exists on the grid; silently staying on the editorial board
+        // is what made the sort chips look broken under 全部.
+        if (mode == FeedMode.Home) mode = FeedMode.Browse
+        if (sort == value && mode == FeedMode.Browse) return
         sort = value
         refreshFeed()
     }
 
     fun chooseDate(value: String) {
+        if (mode == FeedMode.Home) mode = FeedMode.Browse
         if (date == value) return
         date = value
         refreshFeed()
     }
 
     fun chooseDuration(value: String) {
+        if (mode == FeedMode.Home) mode = FeedMode.Browse
         if (duration == value) return
         duration = value
         refreshFeed()
     }
 
     fun toggleTag(value: String) {
+        if (mode == FeedMode.Home) mode = FeedMode.Browse
         if (!tags.remove(value)) tags.add(value)
         refreshFeed()
     }
@@ -247,8 +284,8 @@ class AppViewModel : ViewModel() {
         loading = true
         feedJob = viewModelScope.launch {
             runCatching {
-                // The plain home rows can only answer "no filters at all"; anything
-                // else (genre, sort, date, duration, tags) needs the /search grid.
+                // The editorial rows have no sort parameter at all, so the grid is the
+                // only shape that can honour a sort or filter.
                 if (isGridMode) {
                     val page = repo.searchFiltered(
                         query = "", genre = genre, sort = sort,

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -67,6 +68,8 @@ fun HomeScreen(
     onOpenSearch: () -> Unit,
     onOpen: (Card) -> Unit,
 ) {
+    // The sort row only exists on the grid, so the content offset differs per mode.
+    val contentTop = topInset + if (vm.mode == FeedMode.Browse) 152 else 116
     val gridState = rememberLazyStaggeredGridState()
     val listState = rememberLazyListState()
     var sheetOpen by remember { mutableStateOf(false) }
@@ -94,7 +97,7 @@ fun HomeScreen(
                 contentPadding = PaddingValues(
                     start = 14.dp,
                     end = 14.dp,
-                    top = (topInset + 116).dp,
+                    top = contentTop.dp,
                     bottom = 120.dp,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
@@ -112,7 +115,7 @@ fun HomeScreen(
         } else {
             LazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(top = (topInset + 116).dp, bottom = 120.dp),
+                contentPadding = PaddingValues(top = contentTop.dp, bottom = 120.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 items(vm.sections, key = { it.title }) { section ->
@@ -177,6 +180,19 @@ fun HomeScreen(
                 )
             }
 
+            // Mode switch: the editorial board has no sort parameters, so sorting and
+            // filtering live on the separate 分类 grid. Two explicit tabs beat a screen
+            // that silently changed shape based on which chip was picked.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                ModeTab("首页", vm.mode == FeedMode.Home, backdrop) { vm.chooseMode(FeedMode.Home) }
+                ModeTab("分类", vm.mode == FeedMode.Browse, backdrop) { vm.chooseMode(FeedMode.Browse) }
+            }
+
             // Category switch (user requirement: 首页上方切换 里番/泡面番…)
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
@@ -192,8 +208,9 @@ fun HomeScreen(
                 }
             }
 
-            // Sort switch, prefixed by the filter entry that carries date/duration/tags.
-            LazyRow(
+            // Sort and filters are grid-only. Showing them on the editorial board
+            // implied they worked there, which is the bug this mode switch fixes.
+            if (vm.mode == FeedMode.Browse) LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -247,7 +264,7 @@ fun HomeScreen(
         }
 
         if (vm.error != null) {
-            ErrorPill(vm.error!!, onRetry = { vm.refreshFeed() }, Modifier.align(Alignment.TopCenter).padding(top = (topInset + 112).dp))
+            ErrorPill(vm.error!!, onRetry = { vm.refreshFeed() }, Modifier.align(Alignment.TopCenter).padding(top = (contentTop - 4).dp))
         }
         if (vm.loading && vm.sections.isEmpty() && vm.feed.isEmpty()) {
             LoadingDots(Modifier.align(Alignment.Center))
@@ -271,8 +288,45 @@ fun HomeScreen(
     }
 }
 
-/** Round 32dp header action; filled when the toggle it controls is on. */
+/** Text tab for the 首页/分类 mode switch; only two of them, so no pill background. */
 @Composable
+private fun ModeTab(
+    label: String,
+    selected: Boolean,
+    backdrop: Backdrop?,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label,
+            fontSize = 15.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) Ink.TextPrimary else Ink.TextTertiary,
+        )
+        // Underline rather than a filled pill: the chip rows right below already own
+        // that visual language, and two competing selected states read as noise.
+        Box(
+            Modifier
+                .padding(top = 4.dp)
+                .height(2.5.dp)
+                .width(if (selected) 18.dp else 0.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Ink.Accent)
+        )
+    }
+}
+
+/** Round 32dp header action; filled when the toggle it controls is on. */@Composable
 private fun HeaderButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     description: String,
