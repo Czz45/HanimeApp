@@ -30,6 +30,12 @@ pub struct Settings {
     pub preferred_quality: u32,
     pub storage_dir: String,
     pub auto_play: bool,
+    /// How much timeline a full-width horizontal drag covers, in seconds.
+    ///
+    /// The gesture maps finger travel to a delta proportional to the duration, so
+    /// a 25-minute episode used to jump several minutes per swipe. This is the
+    /// "seconds for a full screen width" knob so slower dragging is available.
+    pub seek_seconds: u32,
 }
 
 impl Default for Settings {
@@ -40,6 +46,7 @@ impl Default for Settings {
             preferred_quality: 1080,
             storage_dir: String::new(),
             auto_play: false,
+            seek_seconds: 90,
         }
     }
 }

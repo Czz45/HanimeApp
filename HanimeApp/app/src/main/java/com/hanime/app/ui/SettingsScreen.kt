@@ -54,6 +54,7 @@ fun SettingsScreen(
     onHideWatched: (Boolean) -> Unit,
     onQuality: (Int) -> Unit,
     onAutoPlay: (Boolean) -> Unit,
+    onSeekSeconds: (Int) -> Unit,
     onProxy: (String) -> Unit,
     onClearWatched: () -> Unit,
     downloadDir: String,
@@ -102,6 +103,35 @@ fun SettingsScreen(
                         selected = settings.preferredQuality == q,
                         backdrop = backdrop,
                         onClick = { onQuality(q) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Divider()
+            Text(
+                "拖动调速",
+                fontSize = 13.sp,
+                color = Ink.TextPrimary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+            Text(
+                "播放时横向滑动一整屏所跨过的时间。范围越小越容易精确定位。",
+                fontSize = 10.5.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(30, 60, 90, 180, 300).forEach { sec ->
+                    GlassChip(
+                        text = if (sec < 60) "${sec}秒" else "${sec / 60}分钟",
+                        selected = settings.seekSeconds == sec,
+                        backdrop = backdrop,
+                        onClick = { onSeekSeconds(sec) },
                     )
                 }
             }

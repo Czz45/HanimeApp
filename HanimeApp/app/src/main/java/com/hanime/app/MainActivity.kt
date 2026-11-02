@@ -66,6 +66,7 @@ import com.hanime.app.ui.DownloadsScreen
 import com.hanime.app.ui.ErrorPill
 import com.hanime.app.ui.HomeScreen
 import com.hanime.app.ui.PlayerScreen
+import com.hanime.app.ui.ReelsScreen
 import com.hanime.app.ui.Route
 import com.hanime.app.ui.SearchScreen
 import com.hanime.app.ui.SettingsScreen
@@ -120,6 +121,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                 scaleMode = vm.videoScale,
                 onScaleChange = { vm.chooseVideoScale(it) },
                 onPositionChange = { ms -> vm.rememberPosition(r.detail.id, ms) },
+                seekSeconds = vm.settings.value.seekSeconds,
             )
 
             else -> {
@@ -141,6 +143,13 @@ private fun Root(vm: AppViewModel = viewModel()) {
                                 vm.saveSettings { it.copy(hideWatched = !it.hideWatched) }
                             },
                             onOpenSearch = { vm.openSearch() },
+                            onOpenReels = {
+                                // Feed the swipe feed from whatever the current screen is
+                                // showing, so it continues the list instead of
+                                // restarting from the top of the site.
+                                val seed = if (vm.isGridMode) vm.feed else vm.sections.flatMap { it.items }
+                                vm.openReels(seed, 0)
+                            },
                             onOpen = { c: Card -> vm.openDetail(c.id, c) },
                         )
 
@@ -160,6 +169,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             onHideWatched = { v -> vm.saveSettings { it.copy(hideWatched = v) } },
                             onQuality = { q -> vm.saveSettings { it.copy(preferredQuality = q) } },
                             onAutoPlay = { v -> vm.saveSettings { it.copy(autoPlay = v) } },
+                            onSeekSeconds = { v -> vm.saveSettings { it.copy(seekSeconds = v) } },
                             onProxy = { p -> vm.saveSettings { it.copy(proxy = p) } },
                             onClearWatched = { vm.clearWatched() },
                             downloadDir = vm.downloadDir(),
@@ -236,6 +246,25 @@ private fun Root(vm: AppViewModel = viewModel()) {
                     }
                 }
 
+                // The swipe feed covers everything: it is not a card over the tabs but
+                // its own full-bleed surface.
+                AnimatedVisibility(
+                    visible = vm.route is Route.Reels,
+                    enter = fadeIn(tween(160)),
+                    exit = fadeOut(tween(140)),
+                ) {
+                    (vm.route as? Route.Reels)?.let { r ->
+                        ReelsScreen(
+                            vm = vm,
+                            cards = r.cards,
+                            start = r.start,
+                            watched = watched,
+                            onOpen = { c -> vm.openDetail(c.id, c) },
+                            onBack = { vm.back() },
+                        )
+                    }
+                }
+
                 // Action failures surface as a floating toast above the bar rather than
                 // reusing the detail-load error slot, which carries retry semantics.
                 vm.notice?.let { text ->
@@ -251,7 +280,8 @@ private fun Root(vm: AppViewModel = viewModel()) {
                 // The bar hides while the sheet is open: the sheet owns the screen and
                 // switching tabs behind it would silently change what "back" returns to.
                 AnimatedVisibility(
-                    visible = vm.route !is Route.Info,
+                    // Hidden for every full page, including the swipe feed.
+                    visible = vm.route is Route.Tabs || vm.route is Route.Search || vm.route is Route.Collection,
                     enter = fadeIn(tween(200)) + slideInVertically(tween(240)) { it / 3 },
                     exit = fadeOut(tween(140)) + slideOutVertically(tween(200)) { it / 3 },
                     modifier = Modifier.align(Alignment.BottomCenter),

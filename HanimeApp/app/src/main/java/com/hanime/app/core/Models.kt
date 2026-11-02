@@ -131,6 +131,8 @@ data class Settings(
     val preferredQuality: Int = 1080,
     val storageDir: String = "",
     val autoPlay: Boolean = false,
+    /** Seconds of timeline a full-width horizontal drag covers. */
+    val seekSeconds: Int = 90,
 )
 
 /** Thrown when the Rust core reports a failure instead of a payload. */

@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridS
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -66,6 +67,7 @@ fun HomeScreen(
     hideWatched: Boolean,
     onToggleHideWatched: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenReels: () -> Unit,
     onOpen: (Card) -> Unit,
 ) {
     // The sort row only exists on the grid, so the content offset differs per mode.
@@ -166,6 +168,12 @@ fun HomeScreen(
 
                 // Quick toggles. Hiding watched videos used to be three taps deep in
                 // Settings, which is far from where the user notices a watched card.
+                HeaderButton(
+                    icon = Icons.Rounded.SmartDisplay,
+                    description = "短视频模式",
+                    active = false,
+                    onClick = onOpenReels,
+                )
                 HeaderButton(
                     icon = if (hideWatched) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
                     description = if (hideWatched) "显示已观看" else "屏蔽已观看",

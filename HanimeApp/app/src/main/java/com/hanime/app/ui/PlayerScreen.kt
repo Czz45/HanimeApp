@@ -90,6 +90,7 @@ fun PlayerScreen(
     scaleMode: Int = 0,
     onScaleChange: (Int) -> Unit = {},
     onPositionChange: (Long) -> Unit = {},
+    seekSeconds: Int = 90,
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -243,7 +244,7 @@ fun PlayerScreen(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(videoRatio, duration) {
+                    .pointerInput(videoRatio, duration, seekSeconds) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             var dx = 0f
@@ -277,8 +278,13 @@ fun PlayerScreen(
                                 }
                                 when (mode) {
                                     1 -> {
+                                        // Seconds-per-full-width instead of a fraction
+                                        // of the duration: on a 25-minute episode the
+                                        // old proportional mapping jumped minutes per
+                                        // swipe, which made fine scrubbing impossible.
                                         val base = if (duration > 0) position else 0L
-                                        val delta = (dx / w * 0.6f * (duration.takeIf { it > 0 } ?: 1L)).toLong()
+                                        val span = seekSeconds * 1000f
+                                        val delta = (dx / w * span).toLong()
                                         seekTo = (base + delta).coerceIn(0L, duration.takeIf { it > 0 } ?: 0L)
                                         scrubTarget = seekTo
                                     }

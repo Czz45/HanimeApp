@@ -209,6 +209,7 @@ object Json {
             preferredQuality = o.optInt("preferred_quality", 1080),
             storageDir = optString(o, "storage_dir"),
             autoPlay = o.optBoolean("auto_play", false),
+            seekSeconds = o.optInt("seek_seconds", 90),
         )
     }.getOrElse { Settings() }
 
@@ -218,5 +219,6 @@ object Json {
         .put("preferred_quality", s.preferredQuality)
         .put("storage_dir", s.storageDir)
         .put("auto_play", s.autoPlay)
+        .put("seek_seconds", s.seekSeconds)
         .toString()
 }

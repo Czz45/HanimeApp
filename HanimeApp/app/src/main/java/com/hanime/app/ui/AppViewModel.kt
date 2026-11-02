@@ -305,6 +305,11 @@ class AppViewModel : ViewModel() {
         if (route is Route.Reels) route = Route.Tabs
     }
 
+    /** Marks a swipe-feed page watched as it becomes current, like opening it would. */
+    fun markReelWatched(id: Long) {
+        viewModelScope.launch { repo.markWatched(id) }
+    }
+
     /**
      * Switches between the editorial board and the sortable grid.
      *
