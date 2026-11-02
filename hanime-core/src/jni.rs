@@ -213,6 +213,21 @@ pub extern "system" fn Java_com_hanime_app_core_Native_translateTitle(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_fetchRandomDetail(
+    mut env: JNIEnv,
+    _class: JClass,
+    genre: JString,
+    tries: jni::sys::jint,
+) -> jstring {
+    let g = from_java(&mut env, genre);
+    let out = match crate::random_detail_in(&g, tries.max(1) as u32) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_startDownload(
     mut env: JNIEnv,
     _class: JClass,

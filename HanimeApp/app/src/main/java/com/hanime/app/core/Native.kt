@@ -41,6 +41,9 @@ object Native {
 
     external fun fetchDetail(id: Long): String
 
+    /** Rolls random catalogue ids until one resolves and belongs to [genre]. */
+    external fun fetchRandomDetail(genre: String, tries: Int): String
+
     external fun startDownload(id: Long, quality: Int, listId: Long, listTitle: String): String
 
     /** Queues a whole playlist; returns `{"queued":N}`. */

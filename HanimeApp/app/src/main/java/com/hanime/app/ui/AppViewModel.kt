@@ -25,6 +25,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+/** How many random picks one swipe-feed batch holds before it refetches. */
+private const val RANDOM_BATCH = 6
+
 /** Genres the site exposes; "全部" keeps the rich home rows instead of a flat grid. */
 val GENRES = listOf(
     "全部", "裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D",
@@ -310,9 +313,10 @@ class AppViewModel : ViewModel() {
     /**
      * Random mode.
      *
-     * The site has no random sort, so this samples whole result pages at random
-     * instead: one page is ~40 titles, which already makes the order feel
-     * arbitrary, and it needs no per-item requests.
+     * The site has no random sort, but it does not need one: `watch?v=<id>` is a
+     * contiguous integer space, so sampling ids *is* sampling the catalogue.
+     * Misses are expected (deleted uploads redirect off-site), and the core rolls
+     * again until it lands on a playable page.
      */
     var reelRandom by mutableStateOf(false)
         private set
@@ -366,19 +370,16 @@ class AppViewModel : ViewModel() {
             reelPage = 0
             reelMaxPage = 1
         }
-        val nextPage = if (reelRandom) {
-            (1..reelMaxPage.coerceAtLeast(1)).random()
-        } else {
-            reelPage + 1
+        if (reelRandom) {
+            loadRandomReels()
+            return
         }
+        val nextPage = reelPage + 1
         reelJob = viewModelScope.launch {
             runCatching {
                 repo.searchFiltered(
                     query = "",
                     genre = reelGenre,
-                    // Random mode pins the sort to "newest" too: the site returns the
-                    // same fixed ordering for every sort, so randomising the page is
-                    // what actually varies the content.
                     sort = "最新上市",
                     date = "",
                     duration = "",
@@ -396,10 +397,44 @@ class AppViewModel : ViewModel() {
                 val fresh = batch.filter { seen.add(it.id) }
                 // Shuffle only in random mode: sequential browsing should keep the
                 // upload order the list is sorted by.
-                reelCards.addAll(if (reelRandom) fresh.shuffled() else fresh)
+                reelCards.addAll(fresh)
                 reelHasNext = lp.hasNext
                 prefetchReels(reelCards.take(2).map { it.id })
             }.onFailure { reelError = it.userMessage() }
+            reelLoading = false
+        }
+    }
+
+    /**
+     * Random batch built straight from random ids.
+     *
+     * Each fetch already returns the full detail, so the page can play without a
+     * second round trip: the parsed [Detail]s go into [reelStore] and the swiper
+     * only needs the card for the caption when it is off-screen.
+     */
+    private fun loadRandomReels() {
+        reelJob = viewModelScope.launch {
+            val batch = mutableListOf<Card>()
+            val hide = settings.value.hideWatched
+            val w = repo.watched.value
+            var lastError: String? = null
+            // A handful per batch keeps the first swipe fast; more load as the
+            // user nears the end.
+            while (batch.size < RANDOM_BATCH) {
+                val d = runCatching { repo.randomDetail(reelGenre) }
+                    .onFailure { lastError = it.userMessage() }
+                    .getOrNull() ?: break
+                if (hide && d.id in w) continue
+                if (reelCards.any { it.id == d.id } || batch.any { it.id == d.id }) continue
+                batch.add(d.toCard())
+            }
+            if (batch.isEmpty()) {
+                reelError = lastError ?: "没抽到可播放的作品"
+            } else {
+                reelCards.addAll(batch)
+                prefetchReels(reelCards.take(2).map { it.id })
+            }
+            reelHasNext = batch.isNotEmpty()
             reelLoading = false
         }
     }
@@ -839,3 +874,17 @@ class AppViewModel : ViewModel() {
         notice = null
     }
 }
+
+/** Card view of a detail, for feeds that arrive as full details. */
+private fun com.hanime.app.core.Detail.toCard(): com.hanime.app.core.Card =
+    com.hanime.app.core.Card(
+        id = id,
+        title = cnTitle.ifBlank { title },
+        cover = cover.ifBlank { poster },
+        dur = if (duration > 0) "%d:%02d".format(duration / 60, duration % 60) else "",
+        score = likePct,
+        views = views,
+        author = author,
+        time = date,
+        wide = cover.contains("/image/thumbnail/") || cover.isBlank(),
+    )

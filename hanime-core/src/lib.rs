@@ -332,6 +332,10 @@ pub fn fetch_list(
     let url = url_for_list(genre, sort, date, duration, page);
     let html = net::get(&url)?;
     let lp = filter_watched(html::parse_list(&html, page)?);
+    for c in &lp.items {
+        note_id(c.id);
+    }
+    *max_page_cell().lock().unwrap() = lp.max_page.max(1);
     serde_json::to_string(&lp).map_err(|e| e.to_string())
 }
 
@@ -360,6 +364,10 @@ pub fn fetch_search_filtered(
         query, genre, sort, date, duration, tags, broad, page,
     ))?;
     let lp = filter_watched(html::parse_list(&html, page)?);
+    for c in &lp.items {
+        note_id(c.id);
+    }
+    *max_page_cell().lock().unwrap() = lp.max_page.max(1);
     serde_json::to_string(&lp).map_err(|e| e.to_string())
 }
 
@@ -420,11 +428,154 @@ pub fn translate_title(text: &str) -> String {
     translate::translate_zh(text)
 }
 
+// -------------------------------------------------------------- random picks
+
+/// Highest id we have seen so far.
+///
+/// The catalogue is one monotonically increasing integer space (`watch?v=<n>`),
+/// so the newest upload also names the top of the range. Every parsed listing
+/// nudges this up, which keeps random picks from drifting into the future as
+/// the site publishes more videos.
+static MAX_SEEN: OnceLock<Mutex<i64>> = OnceLock::new();
+
+/// Floor of the id range. Below this the id either redirects off-site (deleted
+/// uploads 302 to javchu.com) or predates the current catalogue.
+pub const RANDOM_ID_MIN: i64 = 50;
+
+fn max_seen_cell() -> &'static Mutex<i64> {
+    MAX_SEEN.get_or_init(|| Mutex::new(410_000))
+}
+
+fn note_id(id: i64) {
+    if id <= 0 {
+        return;
+    }
+    let mut g = max_seen_cell().lock().unwrap();
+    if id > *g {
+        *g = id;
+    }
+}
+
+/// xorshift64*: good enough for "give me a different video", and it keeps the
+/// dependency list at zero (the core has no `rand`).
+fn next_rand(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}
+
+fn seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    // Mix in the address of a stack local so two launches in the same
+    // nanosecond (ASLR aside) still diverge.
+    let local = 0u8;
+    nanos ^ ((&local as *const u8 as u64) << 17) | 1
+}
+
+pub fn random_id() -> i64 {
+    let hi = *max_seen_cell().lock().unwrap();
+    let mut st = seed();
+    let span = (hi - RANDOM_ID_MIN).max(1) as u64;
+    RANDOM_ID_MIN + (next_rand(&mut st) % span) as i64
+}
+
+/// Picks random ids until one resolves to a playable watch page.
+///
+/// Sampling the id space directly is the cheapest random the site allows, but a
+/// large share of ids no longer answer: deleted uploads 302 to another domain and
+/// gated ones return 403, so roughly two in five samples miss. `tries` bounds
+/// that; a miss costs one request and nothing else.
+pub fn random_detail(tries: u32) -> Result<String, String> {
+    random_detail_in("", tries)
+}
+
+/// Largest page any listing has reported, used to keep genre sampling in range.
+static MAX_PAGE_SEEN: OnceLock<Mutex<u32>> = OnceLock::new();
+
+fn max_page_cell() -> &'static Mutex<u32> {
+    MAX_PAGE_SEEN.get_or_init(|| Mutex::new(1))
+}
+
+/// Random title, optionally restricted to one category.
+///
+/// Without a category the id space *is* the catalogue, so sampling ids gives a
+/// uniform draw — no listing request needed. With a category that stops paying:
+/// the id says nothing about the genre, so each wrong pick is a full page fetched
+/// and thrown away. Those go through a random listing page instead, where every
+/// card is already the right category.
+pub fn random_detail_in(genre: &str, tries: u32) -> Result<String, String> {
+    let want = genre.trim();
+    if !want.is_empty() && want != "全部" {
+        return random_detail_of_genre(want, tries);
+    }
+
+    let mut last = String::from("no random id resolved");
+    for _ in 0..tries.max(1) {
+        let id = random_id();
+        match fetch_detail(id) {
+            Ok(json) => return Ok(json),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// Rolls a random page of `genre` and picks one of its cards.
+///
+/// Two requests worst case: the listing (which also reports the page count) and
+/// the watch page of the chosen card. Pages past the end come back with an empty
+/// card list, so the pick is retried against the count the response just gave us.
+fn random_detail_of_genre(genre: &str, tries: u32) -> Result<String, String> {
+    let mut st = seed();
+    let mut last = String::from("no cards on the sampled page");
+    for _ in 0..tries.max(1) {
+        let hi = (*max_page_cell().lock().unwrap()).max(1) as u64;
+        let page = 1 + (next_rand(&mut st) % hi) as u32;
+        let html = match net::get(&url_for_list(genre, "最新上市", "", "", page)) {
+            Ok(v) => v,
+            Err(e) => {
+                last = e;
+                continue;
+            }
+        };
+        let lp = match html::parse_list(&html, page) {
+            Ok(v) => v,
+            Err(e) => {
+                last = e;
+                continue;
+            }
+        };
+        {
+            let mut g = max_page_cell().lock().unwrap();
+            *g = lp.max_page.max(1);
+        }
+        if lp.items.is_empty() {
+            continue;
+        }
+        let pick = &lp.items[(next_rand(&mut st) % lp.items.len() as u64) as usize];
+        match fetch_detail(pick.id) {
+            Ok(json) => return Ok(json),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 pub fn fetch_detail(id: i64) -> Result<String, String> {
     let url = format!("{BASE}/watch?v={id}");
     let html = net::get(&url)?;
     let mut d = html::parse_watch(&html, id)?;
     d.related.retain(|c| c.id != id);
+    note_id(id);
+    for c in &d.related {
+        note_id(c.id);
+    }
     serde_json::to_string(&d).map_err(|e| e.to_string())
 }
 

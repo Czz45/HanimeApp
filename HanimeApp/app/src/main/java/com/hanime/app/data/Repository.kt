@@ -101,6 +101,16 @@ class Repository {
         Json.detail(Native.fetchDetail(id))
     }
 
+    /**
+     * A random title, optionally restricted to one category.
+     *
+     * The catalogue is a contiguous integer id space, so the core samples ids and
+     * retries on misses (deleted uploads 302 off-site, others have no source).
+     */
+    suspend fun randomDetail(genre: String, tries: Int = 24): Detail = withContext(Dispatchers.IO) {
+        Json.detail(Native.fetchRandomDetail(genre, tries))
+    }
+
     /** Marks a title as watched; the home/list feeds filter it out afterwards. */
     suspend fun markWatched(id: Long) = withContext(Dispatchers.IO) {
         Native.markWatched(id)
