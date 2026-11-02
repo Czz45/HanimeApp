@@ -440,6 +440,27 @@ static MAX_SEEN: OnceLock<Mutex<i64>> = OnceLock::new();
 
 /// Floor of the id range. Below this the id either redirects off-site (deleted
 /// uploads 302 to javchu.com) or predates the current catalogue.
+///
+/// The range is *not* contiguous. Measured on 2026-11 by walking the space in
+/// 1.2 s steps (concurrent sampling trips Cloudflare's 429, so this has to be
+/// slow) and cross-checking against 542 ids scraped from listing pages:
+///
+/// | ids             | state                                              |
+/// |-----------------|----------------------------------------------------|
+/// | 1–9             | 302 → javchu.com (a different site's catalogue)     |
+/// | 10–166774       | oldest block; sparse, mixes 200 / 302 / 403         |
+/// | 166775–401053   | **empty** — every sample 403, never in any listing  |
+/// | 401054–408975   | current block; dense (4–5 of 5 sampled are live)    |
+/// | ≥408976         | 403; above the newest upload                        |
+///
+/// So there are two populated blocks separated by a wide gap, which is what the
+/// "作品序号有三个分段" report was seeing. 403 is the site's answer for "this id
+/// has no upload" — impossible ids like 999999999 return it too, and it does not
+/// change when the client's egress IP changes, so it is not a rate limit.
+///
+/// Consequence for sampling: a uniform draw over the whole space lands in the
+/// gap or a dead id ~97% of the time, which is why callers that need a playable
+/// video go through a listing page instead.
 pub const RANDOM_ID_MIN: i64 = 50;
 
 fn max_seen_cell() -> &'static Mutex<i64> {
@@ -488,9 +509,10 @@ pub fn random_id() -> i64 {
 /// A uniform draw from the id space.
 ///
 /// Kept as a catalogue-level randomiser for callers that do not need a playable
-/// page back. Note that roughly four in five ids no longer answer — deleted
-/// uploads 302 off-site and gated ones 403 — so anything that needs a *video*
-/// should sample a listing page instead (see `random_detail_of_genre`).
+/// page back. Do not build a feed on it: the space has a ~234k-wide empty hole in
+/// the middle (see [RANDOM_ID_MIN]) and even the populated blocks answer 403 for
+/// most ids, so a draw almost never lands on a live upload. Anything that needs a
+/// *video* should sample a listing page instead (see `random_detail_of_genre`).
 pub fn random_detail(tries: u32) -> Result<String, String> {
     random_detail_in("", tries)
 }
