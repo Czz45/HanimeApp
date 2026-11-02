@@ -144,11 +144,9 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             },
                             onOpenSearch = { vm.openSearch() },
                             onOpenReels = {
-                                // Feed the swipe feed from whatever the current screen is
-                                // showing, so it continues the list instead of
-                                // restarting from the top of the site.
-                                val seed = if (vm.isGridMode) vm.feed else vm.sections.flatMap { it.items }
-                                vm.openReels(seed, 0)
+                                // Opens on the genre the home page is already filtered to,
+                                // so the feed continues that context instead of resetting.
+                                vm.openReels(if (vm.genre == "全部") "全部" else vm.genre)
                             },
                             onOpen = { c: Card -> vm.openDetail(c.id, c) },
                         )
@@ -159,6 +157,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             topInset = topInset,
                             onPlayLocal = { t: DownloadTask -> vm.playLocal(t) },
                             onOpenDetail = { id -> vm.openDetail(id) },
+                            onOpenFavorite = { c: Card -> vm.openDetail(c.id, c) },
                         )
 
                         else -> SettingsScreen(
@@ -256,8 +255,6 @@ private fun Root(vm: AppViewModel = viewModel()) {
                     (vm.route as? Route.Reels)?.let { r ->
                         ReelsScreen(
                             vm = vm,
-                            cards = r.cards,
-                            start = r.start,
                             watched = watched,
                             onOpen = { c -> vm.openDetail(c.id, c) },
                             onBack = { vm.back() },

@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
@@ -31,6 +32,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,15 +67,29 @@ fun DownloadsScreen(
     topInset: Int,
     onPlayLocal: (DownloadTask) -> Unit,
     onOpenDetail: (Long) -> Unit,
+    onOpenFavorite: (Card) -> Unit,
 ) {
+    // Two libraries share this page because they answer the same question ("what
+    // do I already have?"): downloaded files are local, favourites are on-site but
+    // bookmarked. A segmented control beats a fourth bottom tab.
+    var segment by remember { mutableStateOf(0) }
     var expandedId by remember { mutableStateOf<Long?>(null) }
     val active = downloads.filter { it.isRunning || it.isPaused }
     val done = downloads.filter { it.isDone }
     val other = downloads.filter { !it.isRunning && !it.isPaused && !it.isDone }
 
+    val favorites by vm.favorites.collectAsStateWithLifecycle()
+
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            contentPadding = PaddingValues(top = (topInset + 74).dp, bottom = 126.dp, start = 14.dp, end = 14.dp),
+        if (segment == 1) {
+            FavoritesList(
+                favorites = favorites,
+                topInset = topInset,
+                onOpen = onOpenFavorite,
+                onRemove = { vm.toggleFavorite(it) },
+            )
+        } else LazyColumn(
+            contentPadding = PaddingValues(top = (topInset + 112).dp, bottom = 126.dp, start = 14.dp, end = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
@@ -175,9 +192,29 @@ fun DownloadsScreen(
                 .padding(start = 18.dp, end = 18.dp, top = (topInset + 10).dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("下载", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextPrimary)
+            Text(if (segment == 0) "下载" else "收藏", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextPrimary)
             Spacer(Modifier.weight(1f))
-            Text("${done.size} 个本地文件", fontSize = 11.sp, color = Ink.TextTertiary)
+            Text(
+                if (segment == 0) "${done.size} 个本地文件" else "${favorites.size} 部作品",
+                fontSize = 11.sp,
+                color = Ink.TextTertiary,
+            )
+        }
+
+        // Segmented control sits under the title, over the list.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = (topInset + 46).dp, start = 18.dp, end = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf("下载", "收藏").forEachIndexed { index, label ->
+                SegmentTab(
+                    label = label,
+                    selected = segment == index,
+                    onClick = { segment = index },
+                )
+            }
         }
     }
 }
@@ -299,5 +336,69 @@ private fun ConfirmDelete(onDeleteFile: () -> Unit, onKeepFile: () -> Unit) {
                 .clickable { onKeepFile() }
                 .padding(vertical = 4.dp),
         )
+    }
+}
+
+/** Small text tab with an underline, matching the home page's mode switch. */
+@Composable
+private fun SegmentTab(label: String, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) Color.White.copy(alpha = 0.10f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) Ink.TextPrimary else Ink.TextTertiary,
+        )
+    }
+}
+
+/** Bookmark list rendered inside the downloads page. */
+@Composable
+private fun FavoritesList(
+    favorites: List<Card>,
+    topInset: Int,
+    onOpen: (Card) -> Unit,
+    onRemove: (Card) -> Unit,
+) {
+    if (favorites.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("还没有收藏", fontSize = 13.sp, color = Ink.TextSecondary)
+                Text(
+                    "点作品上的爱心即可保存，不占空间",
+                    fontSize = 11.5.sp,
+                    color = Ink.TextTertiary,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(top = (topInset + 112).dp, bottom = 126.dp, start = 14.dp, end = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(favorites, key = { it.id }) { card ->
+            ListRow(
+                card = card,
+                watched = false,
+                onClick = { onOpen(card) },
+                trailing = {
+                    IconButtonSmall(
+                        icon = Icons.Rounded.Favorite,
+                        contentDescription = "取消收藏",
+                        onClick = { onRemove(card) },
+                    )
+                },
+            )
+        }
     }
 }

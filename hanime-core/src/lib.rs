@@ -189,6 +189,65 @@ pub fn clear_watched() {
     let _ = std::fs::write(watched_path(), "[]");
 }
 
+// ---------------------------------------------------------------- favorites
+
+/// Favourites are stored as whole cards, not just ids: the list has to render
+/// (cover, title, duration) without a network round trip per entry, and the
+/// detail page only needs the id anyway. They are independent of the download
+/// library so bookmarking never costs disk space.
+fn favorites_path() -> PathBuf {
+    state_dir().join("favorites.json")
+}
+
+static FAVORITES: OnceLock<Mutex<Vec<Card>>> = OnceLock::new();
+
+fn favorites() -> &'static Mutex<Vec<Card>> {
+    FAVORITES.get_or_init(|| {
+        let v: Vec<Card> = std::fs::read_to_string(favorites_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Mutex::new(v)
+    })
+}
+
+fn save_favorites(v: &[Card]) {
+    let _ = std::fs::create_dir_all(state_dir());
+    let _ = std::fs::write(favorites_path(), serde_json::to_string(v).unwrap_or_default());
+}
+
+pub fn favorites_json() -> String {
+    serde_json::to_string(&*favorites().lock().unwrap()).unwrap_or_else(|_| "[]".into())
+}
+
+pub fn is_favorite(id: i64) -> bool {
+    favorites().lock().unwrap().iter().any(|c| c.id == id)
+}
+
+/// Adds the card when absent and removes it when present; the caller passes the
+/// card it already has on screen so no fetch is needed to bookmark it.
+pub fn toggle_favorite(card_json: &str) -> Result<String, String> {
+    let card: Card = serde_json::from_str(card_json).map_err(|e| e.to_string())?;
+    if card.id <= 0 {
+        return Err("card has no id".into());
+    }
+    let mut g = favorites().lock().unwrap();
+    match g.iter().position(|c| c.id == card.id) {
+        Some(i) => {
+            g.remove(i);
+        }
+        // Newest first: the list is a "what do I want to come back to" queue.
+        None => g.insert(0, card),
+    }
+    save_favorites(&g);
+    Ok(serde_json::to_string(&*g).unwrap_or_else(|_| "[]".into()))
+}
+
+pub fn clear_favorites() {
+    favorites().lock().unwrap().clear();
+    save_favorites(&[]);
+}
+
 // ------------------------------------------------------------ library store
 
 fn library_path() -> PathBuf {

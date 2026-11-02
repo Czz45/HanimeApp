@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -52,6 +54,8 @@ fun Cover(
     duration: String = "",
     watched: Boolean = false,
     wide: Boolean = true,
+    favorite: Boolean? = null,
+    onToggleFavorite: (() -> Unit)? = null,
 ) {
     Box(
         modifier
@@ -86,6 +90,25 @@ fun Cover(
                     .padding(8.dp),
             )
         }
+        if (favorite != null && onToggleFavorite != null) {
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .size(26.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = if (favorite) 0.30f else 0.45f))
+                    .clickable(onClick = onToggleFavorite),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Favorite,
+                    contentDescription = if (favorite) "取消收藏" else "收藏",
+                    tint = if (favorite) Ink.Accent else Color.White.copy(alpha = 0.92f),
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
         if (watched) {
             Box(
                 Modifier
@@ -107,6 +130,8 @@ fun RowCard(
     watched: Boolean,
     onClick: () -> Unit,
     width: androidx.compose.ui.unit.Dp = 158.dp,
+    favorite: Boolean? = null,
+    onToggleFavorite: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     Column(
@@ -120,6 +145,8 @@ fun RowCard(
             duration = card.dur,
             watched = watched,
             wide = card.wide,
+            favorite = favorite,
+            onToggleFavorite = onToggleFavorite,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(if (card.wide) 16f / 9f else 0.68f),
@@ -156,6 +183,8 @@ fun GridCard(
     watched: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    favorite: Boolean? = null,
+    onToggleFavorite: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     Column(
@@ -168,6 +197,8 @@ fun GridCard(
             duration = card.dur,
             watched = watched,
             wide = card.wide,
+            favorite = favorite,
+            onToggleFavorite = onToggleFavorite,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(if (card.wide) 16f / 9f else 0.68f),

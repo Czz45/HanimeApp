@@ -37,6 +37,16 @@ class Repository {
     private val _watched = MutableStateFlow<Set<Long>>(emptySet())
     val watched: StateFlow<Set<Long>> = _watched.asStateFlow()
 
+    /**
+     * Bookmarks, kept in the Rust core next to the watch history.
+     *
+     * Deliberately separate from [downloads]: a favourite is a "come back to this"
+     * marker and must cost no disk space, so it stores the card metadata only and
+     * the detail page is still fetched on open.
+     */
+    private val _favorites = MutableStateFlow<List<Card>>(emptyList())
+    val favorites: StateFlow<List<Card>> = _favorites.asStateFlow()
+
     fun init(stateDir: String) {
         Native.init(stateDir)
         _settings.value = Json.settings(Native.getSettingsJson())
@@ -100,6 +110,22 @@ class Repository {
     suspend fun clearWatched() = withContext(Dispatchers.IO) {
         Native.clearWatched()
         _watched.value = emptySet()
+    }
+
+    private fun reloadFavorites() {
+        _favorites.value = runCatching { Json.cards(Native.favoritesJson()) }.getOrDefault(emptyList())
+    }
+
+    /** Adds or removes one bookmark and hands back the updated list. */
+    suspend fun toggleFavorite(card: Card) = withContext(Dispatchers.IO) {
+        val raw = Native.toggleFavorite(Json.cardToJson(card))
+        _favorites.value = runCatching { Json.cards(raw) }.getOrElse { _favorites.value }
+        _favorites.value
+    }
+
+    suspend fun clearFavorites() = withContext(Dispatchers.IO) {
+        Native.clearFavorites()
+        _favorites.value = emptyList()
     }
 
     fun refreshDownloads() {

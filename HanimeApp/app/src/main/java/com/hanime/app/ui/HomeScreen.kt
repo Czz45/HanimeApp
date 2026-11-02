@@ -111,6 +111,8 @@ fun HomeScreen(
                         card = card,
                         watched = card.id in watched,
                         onClick = { onOpen(card) },
+                        favorite = vm.isFavorite(card.id),
+                        onToggleFavorite = { vm.toggleFavorite(card) },
                     )
                 }
             }
@@ -132,6 +134,8 @@ fun HomeScreen(
                                     card = card,
                                     watched = card.id in watched,
                                     onClick = { onOpen(card) },
+                                    favorite = vm.isFavorite(card.id),
+                                    onToggleFavorite = { vm.toggleFavorite(card) },
                                 )
                             }
                         }

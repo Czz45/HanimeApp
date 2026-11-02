@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -78,46 +80,70 @@ import kotlinx.coroutines.delay
 @Composable
 fun ReelsScreen(
     vm: AppViewModel,
-    cards: List<Card>,
-    start: Int,
     watched: Set<Long>,
     onOpen: (Card) -> Unit,
     onBack: () -> Unit,
 ) {
-    if (cards.isEmpty()) {
-        onBack()
-        return
-    }
+    val cards = vm.reelCards
     val pager = rememberPagerState(
-        initialPage = start.coerceIn(0, cards.lastIndex),
+        initialPage = 0,
         pageCount = { cards.size },
     )
     var muted by remember { mutableStateOf(false) }
 
     // Warm the two pages below: the next swipe should start instantly, and fetching
-    // further ahead would compete with the clip that is playing now.
-    LaunchedEffect(pager.currentPage) {
+    // further ahead would compete with the clip that is playing now. The last two
+    // pages also pull the next batch so the feed never dead-ends.
+    LaunchedEffect(pager.currentPage, cards.size) {
+        if (cards.isEmpty()) return@LaunchedEffect
         val from = (pager.currentPage + 1).coerceAtMost(cards.lastIndex)
         val to = (pager.currentPage + 2).coerceAtMost(cards.lastIndex)
         if (from <= to) vm.prefetchReels((from..to).map { cards[it].id })
         // Mark as watched on arrival, same as opening the detail page does.
         cards.getOrNull(pager.currentPage)?.let { vm.markReelWatched(it.id) }
+        if (pager.currentPage >= cards.size - 3) vm.loadReels(reset = false)
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        VerticalPager(
+        if (cards.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (vm.reelLoading) {
+                    LoadingDots()
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            vm.reelError ?: "这个分类暂时没有内容",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.7f),
+                        )
+                        Text(
+                            "重试",
+                            fontSize = 11.sp,
+                            color = Color.White,
+                            modifier = Modifier
+                                .padding(top = 12.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.White.copy(alpha = 0.16f))
+                                .clickable { vm.loadReels(reset = true) }
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        } else VerticalPager(
             state = pager,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
         ) { page ->
+            val card = cards.getOrNull(page) ?: return@VerticalPager
             ReelPage(
                 vm = vm,
-                card = cards[page],
+                card = card,
                 active = page == pager.currentPage,
-                watched = cards[page].id in watched,
+                watched = card.id in watched,
                 muted = muted,
                 onToggleMute = { muted = !muted },
-                onOpen = { onOpen(cards[page]) },
+                onOpen = { onOpen(card) },
             )
         }
 
@@ -149,10 +175,40 @@ fun ReelsScreen(
             }
             Spacer(Modifier.weight(1f))
             Text(
-                "${pager.currentPage + 1} / ${cards.size}",
+                if (cards.isEmpty()) "" else "${pager.currentPage + 1} / ${cards.size}",
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.7f),
             )
+        }
+
+        // Genre selector along the top. The feed reloads in place and the pager
+        // resets to the first item, which is what picking a new genre should mean.
+        Row(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .padding(top = 50.dp),
+        ) {
+            LazyRow(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                items(GENRES, key = { it }) { g ->
+                    val on = vm.reelGenre == g
+                    Text(
+                        g,
+                        fontSize = 11.5.sp,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (on) Color(0xFF0B0B10) else Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (on) Color.White else Color.Black.copy(alpha = 0.42f))
+                            .clickable { vm.chooseReelGenre(g) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -178,17 +234,21 @@ private fun ReelPage(
             .onFailure { failed = true }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        // Poster fills the frame while the metadata resolves, so a fast swipe never
-        // flashes a black rectangle.
-        com.hanime.app.ui.Cover(
-            url = card.cover,
-            modifier = Modifier.fillMaxSize(),
-            corner = 0.dp,
-            wide = card.wide,
-        )
-        if (detail == null && card.cover.isBlank()) {
-            Box(Modifier.fillMaxSize().background(Ink.BgElevated))
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        // Poster covers the frame only while the metadata resolves, so a fast swipe
+        // never flashes a black rectangle. Once the video exists the backdrop turns
+        // black: a poster behind letterbox bars looks like a stretched video.
+        if (detail == null) {
+            if (card.cover.isNotBlank()) {
+                com.hanime.app.ui.Cover(
+                    url = card.cover,
+                    modifier = Modifier.fillMaxSize(),
+                    corner = 0.dp,
+                    wide = card.wide,
+                )
+            } else {
+                Box(Modifier.fillMaxSize().background(Ink.BgElevated))
+            }
         }
 
         val source = remember(detail) { detail?.sources?.maxByOrNull { it.quality } }
@@ -281,29 +341,46 @@ private fun ReelPage(
             }
         }
 
-        // Mute toggle, top right under the counter.
+        // Bookmark + mute, stacked on the right so they never cover the frame centre.
         AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
-            Box(
+            Column(
                 Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 14.dp)
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onToggleMute() },
-                contentAlignment = Alignment.Center,
+                    .padding(end = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(
-                    if (muted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
-                    contentDescription = if (muted) "取消静音" else "静音",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
+                FavoriteButton(
+                    active = vm.isFavorite(card.id),
+                    onClick = { vm.toggleFavorite(card) },
+                    size = 38,
                 )
+                MuteButton(muted = muted, onClick = onToggleMute)
             }
         }
+    }
+}
+
+@Composable
+private fun MuteButton(muted: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (muted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+            contentDescription = if (muted) "取消静音" else "静音",
+            tint = Color.White,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 

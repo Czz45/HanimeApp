@@ -80,7 +80,13 @@ sealed interface Route {
      * The queue is a snapshot taken when the feed opened: the grid underneath can
      * refetch, but the thing the user is swiping must not change under their finger.
      */
-    data class Reels(val cards: List<Card>, val start: Int) : Route
+    /**
+     * Swipe feed. It carries only the genre: the list itself lives in the view
+     * model so switching genre, paging in more, or hiding watched items reloads
+     * the feed in place instead of rebuilding the route (which would drop the
+     * pager back to the first page).
+     */
+    data class Reels(val genre: String) : Route
 }
 
 class AppViewModel : ViewModel() {
@@ -88,6 +94,7 @@ class AppViewModel : ViewModel() {
     private val repo = Graph.repo
 
     val downloads: StateFlow<List<DownloadTask>> = repo.downloads
+    val favorites: StateFlow<List<Card>> = repo.favorites
     val settings: StateFlow<Settings> = repo.settings
 
     var tab by mutableStateOf(0)
@@ -296,14 +303,88 @@ class AppViewModel : ViewModel() {
         }
     }
 
-    fun openReels(cards: List<Card>, start: Int) {
-        if (cards.isEmpty()) return
-        route = Route.Reels(cards, start.coerceIn(0, cards.lastIndex))
+    // ---- swipe feed ------------------------------------------------------
+    val reelCards = mutableStateListOf<Card>()
+    var reelGenre by mutableStateOf("全部")
+        private set
+    var reelLoading by mutableStateOf(false)
+        private set
+    var reelError by mutableStateOf<String?>(null)
+        private set
+    private var reelPage = 1
+    private var reelHasNext = false
+    private var reelJob: Job? = null
+
+    fun openReels(genre: String = "全部") {
+        reelGenre = genre
+        route = Route.Reels(genre)
+        loadReels(reset = true)
+    }
+
+    fun chooseReelGenre(genre: String) {
+        if (reelGenre == genre) return
+        reelGenre = genre
+        loadReels(reset = true)
+    }
+
+    /**
+     * Pulls a page for the swipe feed.
+     *
+     * Same `/search` endpoint as the browse grid so every genre works and paging
+     * continues past the first page; the reels list is kept separate from [feed]
+     * because the two have independent filters.
+     */
+    fun loadReels(reset: Boolean = false) {
+        if (reelJob?.isActive == true) return
+        if (!reset && !reelHasNext) return
+        val page = if (reset) 1 else reelPage + 1
+        reelLoading = true
+        reelError = null
+        if (reset) reelCards.clear()
+        reelJob = viewModelScope.launch {
+            runCatching {
+                repo.searchFiltered(
+                    query = "",
+                    genre = reelGenre,
+                    sort = "最新上市",
+                    date = "",
+                    duration = "",
+                    tags = emptyList(),
+                    broad = false,
+                    page = page,
+                )
+            }.onSuccess { lp ->
+                val hide = settings.value.hideWatched
+                val w = repo.watched.value
+                val add = if (hide) lp.items.filter { it.id !in w } else lp.items
+                val seen = reelCards.mapTo(mutableSetOf()) { it.id }
+                reelCards.addAll(add.filter { seen.add(it.id) })
+                reelPage = page
+                reelHasNext = lp.hasNext
+                // Warm the first two so the very first swipe is instant.
+                prefetchReels(reelCards.take(2).map { it.id })
+            }.onFailure { reelError = it.userMessage() }
+            reelLoading = false
+        }
     }
 
     fun closeReels() {
         if (route is Route.Reels) route = Route.Tabs
     }
+
+    /** Bookmark toggle; the card on screen is passed in so nothing is refetched. */
+    fun toggleFavorite(card: Card) {
+        viewModelScope.launch {
+            runCatching { repo.toggleFavorite(card) }
+                .onFailure { notice = it.userMessage() }
+        }
+    }
+
+    /**
+     * Bookmark state read straight off the flow so every place that shows a heart
+     * (grid, reels, detail) reflects one source of truth without extra plumbing.
+     */
+    fun isFavorite(id: Long): Boolean = repo.favorites.value.any { it.id == id }
 
     /** Marks a swipe-feed page watched as it becomes current, like opening it would. */
     fun markReelWatched(id: Long) {

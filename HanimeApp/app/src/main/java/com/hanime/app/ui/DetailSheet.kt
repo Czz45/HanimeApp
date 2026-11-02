@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -251,13 +252,65 @@ fun DetailSheet(
 
                 // ---- play / download --------------------------------------
                 val sources = detail?.sources.orEmpty()
+                if (detail != null) {
+                    // Bookmark lives next to the quality picker: it acts on the same
+                    // title the user is about to play, so it belongs in this block
+                    // rather than floating over the hero image.
+                    val favCard = Card(
+                        id = detail.id,
+                        title = detail.title,
+                        cover = detail.cover,
+                        dur = "",
+                        score = detail.likePct,
+                        views = detail.views,
+                        author = detail.author,
+                        time = "",
+                        wide = detail.cover.contains("/image/thumbnail/") || detail.cover.isBlank(),
+                    )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 20.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { vm.toggleFavorite(favCard) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val on = vm.isFavorite(detail.id)
+                        Icon(
+                            Icons.Rounded.Favorite,
+                            contentDescription = if (on) "取消收藏" else "收藏",
+                            tint = if (on) Ink.Accent else Ink.TextSecondary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Text(
+                            if (on) "已收藏" else "收藏",
+                            fontSize = 12.5.sp,
+                            color = if (on) Ink.Accent else Ink.TextSecondary,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                        Spacer(Modifier.weight(1f))
+                        if (detail.listId > 0L) {
+                            Text(
+                                "所属合集",
+                                fontSize = 11.sp,
+                                color = Ink.TextTertiary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Color.White.copy(alpha = 0.06f))
+                                    .clickable { onOpenCollection(detail.listId, detail.listTitle) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
                 if (sources.isNotEmpty()) {
                     Text(
                         "清晰度",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Ink.TextPrimary,
-                        modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
+                        modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
                     )
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(9.dp),

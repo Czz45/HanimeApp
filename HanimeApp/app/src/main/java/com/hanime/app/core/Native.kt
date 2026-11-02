@@ -70,6 +70,14 @@ object Native {
     external fun watchedJson(): String
     external fun clearWatched()
 
+    /** Favourites are bookmarks only: they never touch the download library. */
+    external fun favoritesJson(): String
+    external fun isFavorite(id: Long): Boolean
+
+    /** Adds when absent, removes when present; returns the whole list as JSON. */
+    external fun toggleFavorite(cardJson: String): String
+    external fun clearFavorites()
+
     external fun getSettingsJson(): String
     external fun setSettingsJson(json: String): String
 }

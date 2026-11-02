@@ -237,7 +237,9 @@ fun SearchScreen(
                         SearchRow(
                             card = card,
                             watched = card.id in watched,
+                            favorite = vm.isFavorite(card.id),
                             onClick = { onOpen(card) },
+                            onToggleFavorite = { vm.toggleFavorite(card) },
                         )
                     }
                     if (vm.searching) {
@@ -267,7 +269,13 @@ fun SearchScreen(
 
 /** Compact horizontal row: search results carry both wide and portrait covers. */
 @Composable
-private fun SearchRow(card: Card, watched: Boolean, onClick: () -> Unit) {
+private fun SearchRow(
+    card: Card,
+    watched: Boolean,
+    favorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     Row(
         Modifier
@@ -284,7 +292,11 @@ private fun SearchRow(card: Card, watched: Boolean, onClick: () -> Unit) {
                 .height(if (card.wide) 61.dp else 96.dp)
                 .clip(RoundedCornerShape(9.dp))
         ) {
-            Cover(url = card.cover, modifier = Modifier.fillMaxSize(),
+            Cover(
+                url = card.cover,
+                modifier = Modifier.fillMaxSize(),
+                favorite = favorite,
+                onToggleFavorite = onToggleFavorite,
                 duration = card.dur, watched = false, wide = card.wide)
         }
         Column(Modifier.padding(start = 11.dp).weight(1f)) {

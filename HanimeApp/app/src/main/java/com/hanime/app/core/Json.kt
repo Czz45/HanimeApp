@@ -41,6 +41,30 @@ object Json {
         wide = if (o.has("wide")) o.optBoolean("wide", true) else !optString(o, "cover").contains("/image/cover/"),
     )
 
+    /** Whole favourite list; the core stores full cards so this needs no fetch. */
+    fun cards(raw: String): List<Card> {
+        val arr = runCatching { JSONArray(raw) }
+            .getOrElse { throw CoreException(failureText(raw)) }
+        val out = ArrayList<Card>(arr.length())
+        for (i in 0 until arr.length()) {
+            arr.optJSONObject(i)?.let { out.add(card(it)) }
+        }
+        return out
+    }
+
+    /** Inverse of [card]; the core deserialises straight into its own `Card`. */
+    fun cardToJson(c: Card): String = JSONObject().apply {
+        put("id", c.id)
+        put("title", c.title)
+        put("cover", c.cover)
+        put("dur", c.dur)
+        put("score", c.score)
+        put("views", c.views)
+        put("author", c.author)
+        put("time", c.time)
+        put("wide", c.wide)
+    }.toString()
+
     /**
      * Runs [block] and turns an `{"error": ...}` payload into a [CoreException].
      * Every core call funnels through here so callers only deal with two paths.

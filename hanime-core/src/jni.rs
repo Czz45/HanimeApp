@@ -311,6 +311,44 @@ pub extern "system" fn Java_com_hanime_app_core_Native_clearWatched(env: JNIEnv,
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_favoritesJson(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::favorites_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_isFavorite(
+    _env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+) -> jni::sys::jboolean {
+    if crate::is_favorite(id) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_toggleFavorite(
+    mut env: JNIEnv,
+    _class: JClass,
+    cardJson: JString,
+) -> jstring {
+    let json = from_java(&mut env, cardJson);
+    let out = match crate::toggle_favorite(&json) {
+        Ok(v) => v,
+        Err(e) => format!("{{\"error\":\"{}\"}}", escape(&e)),
+    };
+    to_java(&env, out)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_clearFavorites(env: JNIEnv, _class: JClass) {
+    crate::clear_favorites();
+    let _ = env;
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_getSettingsJson(env: JNIEnv, _class: JClass) -> jstring {
     to_java(&env, crate::get_settings_json())
 }

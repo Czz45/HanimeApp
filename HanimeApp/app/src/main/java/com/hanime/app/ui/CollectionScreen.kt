@@ -116,7 +116,11 @@ fun CollectionScreen(
                                 .height(if (card.wide) 56.dp else 88.dp)
                                 .clip(RoundedCornerShape(8.dp))
                         ) {
-                            Cover(url = card.cover, modifier = Modifier.fillMaxSize(),
+                            Cover(
+                url = card.cover,
+                modifier = Modifier.fillMaxSize(),
+                favorite = vm.isFavorite(card.id),
+                onToggleFavorite = { vm.toggleFavorite(card) },
                 duration = card.dur, watched = false, wide = card.wide)
                         }
                         Column(Modifier.padding(start = 10.dp).weight(1f)) {
