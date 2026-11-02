@@ -441,26 +441,40 @@ static MAX_SEEN: OnceLock<Mutex<i64>> = OnceLock::new();
 /// Floor of the id range. Below this the id either redirects off-site (deleted
 /// uploads 302 to javchu.com) or predates the current catalogue.
 ///
-/// The range is *not* contiguous. Measured on 2026-11 by walking the space in
-/// 1.2 s steps (concurrent sampling trips Cloudflare's 429, so this has to be
-/// slow) and cross-checking against 542 ids scraped from listing pages:
+/// The range is *not* contiguous, and it is not even all ours. Measured on
+/// 2026-11 by walking the space in 1 s steps (concurrent sampling trips
+/// Cloudflare's 429, so this has to be slow) and cross-checking against 542 ids
+/// scraped from ten listing pages:
 ///
-/// | ids             | state                                              |
+/// | ids             | owner / state                                      |
 /// |-----------------|----------------------------------------------------|
-/// | 1–9             | 302 → javchu.com (a different site's catalogue)     |
-/// | 10–166774       | oldest block; sparse, mixes 200 / 302 / 403         |
+/// | 1–9             | javchu (302 to the other catalogue)                 |
+/// | 10–98           | hanime1, old uploads                                |
+/// | 99–122          | javchu                                              |
+/// | 123–166774      | both, interleaved — see the block list below        |
 /// | 166775–401053   | **empty** — every sample 403, never in any listing  |
-/// | 401054–408975   | current block; dense (4–5 of 5 sampled are live)    |
+/// | 401054–408975   | both, interleaved; last live id is 408975           |
 /// | ≥408976         | 403; above the newest upload                        |
 ///
-/// So there are two populated blocks separated by a wide gap, which is what the
-/// "作品序号有三个分段" report was seeing. 403 is the site's answer for "this id
-/// has no upload" — impossible ids like 999999999 return it too, and it does not
-/// change when the client's egress IP changes, so it is not a rate limit.
+/// Within 123–166774 the two catalogues alternate in runs of a few thousand:
+/// 22.5k–25k H, 40.5k–48k J, 52.5k–55k J, **65k–95k J**, 97.5k–105k H,
+/// 117.5k–140k J, then a fine-grained mix of H and J up to 166.6k. The second
+/// block behaves the same way (401k–402.6k J, ~402.9k H, 403.1k–404.1k J,
+/// 404.35k–408.96k H). `H` = hanime1, `J` = javchu.
+///
+/// That interleaving is the giveaway: each site 302s to the other for ids it
+/// does not own, in both directions, so this is one shared integer sequence
+/// split between two catalogues rather than two independent ranges. It also
+/// explains why ids do not sort by date — 401054 (2021-10-09) sits above
+/// 166774 (2024-08-18) because the two sites keep appending independently.
+///
+/// 403 is the site's answer for "this id has no upload" — impossible ids like
+/// 999999999 return it too, and it does not change when the client's egress IP
+/// changes, so it is not a rate limit.
 ///
 /// Consequence for sampling: a uniform draw over the whole space lands in the
-/// gap or a dead id ~97% of the time, which is why callers that need a playable
-/// video go through a listing page instead.
+/// gap, a dead id, or a javchu id ~97% of the time, which is why callers that
+/// need a playable video go through a listing page instead.
 pub const RANDOM_ID_MIN: i64 = 50;
 
 fn max_seen_cell() -> &'static Mutex<i64> {
