@@ -196,6 +196,10 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
+        CacheGroup(backdrop)
+
+        Spacer(Modifier.height(14.dp))
+
         UpdateGroup(vm, appVersion, backdrop)
 
         Spacer(Modifier.height(20.dp))
@@ -319,6 +323,104 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
             )
         }
     }
+}
+
+/**
+ * Shows and clears the two caches that keep scrolling and playback from reloading.
+ *
+ * They are separate on purpose: cover art is cheap to re-fetch and the video cache
+ * holds real megabytes, so users may want to drop one without the other.
+ */
+@Composable
+private fun CacheGroup(backdrop: Backdrop?) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var imageBytes by remember { mutableStateOf(0L) }
+    var videoBytes by remember { mutableStateOf(0L) }
+
+    fun refresh() {
+        imageBytes = dirSize(java.io.File(context.cacheDir, "image_cache"))
+        videoBytes = dirSize(java.io.File(context.cacheDir, "video_cache"))
+    }
+    LaunchedEffect(Unit) { refresh() }
+
+    SettingsGroup("缓存", backdrop) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("封面图片", fontSize = 13.sp, color = Ink.TextPrimary)
+                Text(
+                    if (imageBytes > 0) formatBytes(imageBytes) else "暂无缓存",
+                    fontSize = 10.5.sp,
+                    color = Ink.TextTertiary,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+            ClearButton {
+                java.io.File(context.cacheDir, "image_cache").deleteRecursively()
+                coil3.SingletonImageLoader.get(context).memoryCache?.clear()
+                coil3.SingletonImageLoader.get(context).diskCache?.clear()
+                refresh()
+            }
+        }
+        Divider()
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("视频播放缓存", fontSize = 13.sp, color = Ink.TextPrimary)
+                Text(
+                    if (videoBytes > 0) formatBytes(videoBytes) else "暂无缓存",
+                    fontSize = 10.5.sp,
+                    color = Ink.TextTertiary,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+            ClearButton {
+                // SimpleCache keeps an in-memory index over the folder, so it has to
+                // be released before the files can be removed.
+                com.hanime.app.MediaCache.release()
+                java.io.File(context.cacheDir, "video_cache").deleteRecursively()
+                refresh()
+            }
+        }
+        Text(
+            "视频缓存可减少重复播放和拖动时的加载，上限 2 GB",
+            fontSize = 10.sp,
+            color = Ink.TextTertiary,
+            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+        )
+    }
+}
+
+@Composable
+private fun ClearButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.08f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("清除", fontSize = 11.sp, color = Ink.TextSecondary)
+    }
+}
+
+private fun dirSize(dir: java.io.File): Long =
+    if (!dir.exists()) 0L else dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> "%.1f GB".format(bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "%.0f MB".format(bytes / (1L shl 20).toDouble())
+    bytes >= 1L shl 10 -> "%.0f KB".format(bytes / (1L shl 10).toDouble())
+    else -> "$bytes B"
 }
 
 /** Numeric, segment-wise compare so 1.0.10 sorts above 1.0.9. */

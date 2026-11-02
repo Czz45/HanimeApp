@@ -74,7 +74,7 @@ fun SearchScreen(
         derivedStateOf {
             val info = listState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            info.totalItemsCount > 0 && last >= info.totalItemsCount - 4
+            info.totalItemsCount > 0 && last >= info.totalItemsCount - 6
         }
     }
     LaunchedEffect(nearEnd) { if (nearEnd) vm.searchMore() }

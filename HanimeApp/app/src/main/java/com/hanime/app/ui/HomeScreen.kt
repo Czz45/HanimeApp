@@ -71,12 +71,13 @@ fun HomeScreen(
     val listState = rememberLazyListState()
     var sheetOpen by remember { mutableStateOf(false) }
 
-    // Paging trigger: fire once the last row is within two cells of the end.
+    // Paging trigger: start the next request while eight cells are still ahead, so
+    // the page is usually already in hand by the time the user reaches the bottom.
     val nearEnd by remember {
         derivedStateOf {
             val info = gridState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            info.totalItemsCount > 0 && last >= info.totalItemsCount - 4
+            info.totalItemsCount > 0 && last >= info.totalItemsCount - 8
         }
     }
     LaunchedEffect(nearEnd, vm.genre, vm.sort) {

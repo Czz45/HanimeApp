@@ -17,8 +17,8 @@ android {
         // Bump both on every release: the in-app updater compares versionName
         // against the latest GitHub tag, and Android refuses a same-or-higher
         // versionCode reinstall over an existing install.
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
         ndk {
             // The Rust core is prebuilt per ABI and dropped into jniLibs.
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -77,6 +77,8 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
 
     implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-datasource:1.4.1")
+    implementation("androidx.media3:media3-database:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
     // Pinned to the version present in the local cache; media3's default
     // (33.0.0-android) is not available offline.

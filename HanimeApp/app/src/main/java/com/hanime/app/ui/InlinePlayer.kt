@@ -79,11 +79,7 @@ fun InlinePlayer(
     // Keyed on the URL: changing quality releases the old player and builds a new
     // one, which is cheaper and far less stateful than swapping a MediaItem.
     val player = remember(source.url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(source.url))
-            prepare()
-            playWhenReady = true
-        }
+        com.hanime.app.Players.build(context, source.url, com.hanime.app.Ua.BROWSER)
     }
 
     DisposableEffect(player) {

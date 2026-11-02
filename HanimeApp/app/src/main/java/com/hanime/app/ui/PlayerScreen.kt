@@ -98,11 +98,7 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
     var lastTapAt by remember { mutableStateOf(0L) }
 
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(source.url))
-            prepare()
-            playWhenReady = true
-        }
+        com.hanime.app.Players.build(context, source.url, com.hanime.app.Ua.BROWSER)
     }
 
     // The rotate button pins the activity to an orientation, and nothing else in
