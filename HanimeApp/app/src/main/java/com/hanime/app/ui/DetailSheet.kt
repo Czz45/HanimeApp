@@ -74,7 +74,7 @@ fun DetailSheet(
     onBack: () -> Unit,
     onOpenRelated: (Card) -> Unit,
     onOpenCollection: (Long, String) -> Unit,
-    onFullscreen: (Source?) -> Unit,
+    onFullscreen: (Source?, Long) -> Unit,
 ) {
     val scroll = rememberScrollState()
     val poster = detail?.poster?.ifBlank { detail.cover } ?: seed?.cover.orEmpty()
@@ -112,7 +112,11 @@ fun DetailSheet(
                     InlinePlayer(
                         detail = detail,
                         source = inline,
-                        onFullscreen = { onFullscreen(inline) },
+                        onFullscreen = { pos -> onFullscreen(inline, pos) },
+                        // Same title, same playhead: entering full screen and coming
+                        // back both resume where the other left off.
+                        startAt = vm.positionFor(detail.id),
+                        onDisposePosition = { ms -> vm.rememberPosition(detail.id, ms) },
                     )
                 }
                 Spacer(Modifier.height(14.dp))

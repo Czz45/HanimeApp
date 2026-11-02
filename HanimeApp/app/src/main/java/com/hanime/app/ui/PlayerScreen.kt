@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -80,7 +82,15 @@ import kotlin.math.abs
  * back button and slider receive taps before the tap-to-toggle handler does.
  */
 @Composable
-fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
+fun PlayerScreen(
+    detail: Detail,
+    source: Source,
+    onBack: () -> Unit,
+    startAt: Long = 0L,
+    scaleMode: Int = 0,
+    onScaleChange: (Int) -> Unit = {},
+    onPositionChange: (Long) -> Unit = {},
+) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val audio = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -96,9 +106,11 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
     var scrubTarget by remember { mutableStateOf<Long?>(null) }
     var hud by remember { mutableStateOf<String?>(null) }
     var lastTapAt by remember { mutableStateOf(0L) }
+    var scaleMenu by remember { mutableStateOf(false) }
 
     val player = remember {
         com.hanime.app.Players.build(context, source.url, com.hanime.app.Ua.BROWSER)
+            .apply { if (startAt > 0) seekTo(startAt) }
     }
 
     // The rotate button pins the activity to an orientation, and nothing else in
@@ -108,8 +120,24 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
     val initialOrientation = remember {
         activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
+    // Entering full screen means "show me the video", so rotate on arrival instead
+    // of making the user hunt for the rotate button every time. Only once, and only
+    // for landscape clips — forcing a portrait clip sideways would be worse than
+    // leaving it upright.
+    var autoRotated by remember { mutableStateOf(false) }
+    LaunchedEffect(videoRatio) {
+        if (!autoRotated && videoRatio >= 1f) {
+            autoRotated = true
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+    }
     DisposableEffect(Unit) {
-        onDispose { activity?.requestedOrientation = initialOrientation }
+        onDispose {
+            // Hand the playhead back before the player is released so the inline
+            // player on the detail sheet resumes at the same frame instead of 0.
+            onPositionChange(player.currentPosition.coerceAtLeast(0L))
+            activity?.requestedOrientation = initialOrientation
+        }
     }
 
     DisposableEffect(Unit) {
@@ -139,9 +167,17 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
     // Poll the clock rather than listening to every frame: 120 ms is smooth for a
     // progress bar and costs nothing compared with a per-frame callback.
     LaunchedEffect(Unit) {
+        var sinceSync = 0
         while (true) {
             position = player.currentPosition.coerceAtLeast(0L)
             duration = player.duration.coerceAtLeast(0L)
+            // Publish the playhead about once a second, not on every tick. The
+            // detail sheet composes (and reads the position) before this screen's
+            // onDispose runs, so a dispose-only hand-off would be too late.
+            if (++sinceSync >= 8) {
+                sinceSync = 0
+                onPositionChange(position)
+            }
             delay(120)
         }
     }
@@ -162,15 +198,43 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // ---- video surface (letterboxed) --------------------------------
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // ---- video surface -------------------------------------------------
+        // A raw SurfaceView stretches the video to whatever size it is given, so the
+        // fit mode is expressed purely by the surface's dimensions, measured against
+        // the container's real aspect ratio:
+        //   fit   — smaller or equal on both axes, letterboxed
+        //   fill  — cover: one axis matches the screen, the other overflows and is
+        //           clipped by the parent, so the picture reaches the edges uncropped
+        //           in the middle rather than being squashed
+        //   stretch — exactly the screen, distortion included
+        // Fill matters for subtitled frames: letterboxing shrinks the picture until
+        // the bottom line of text is unreadable, and stretching deforms everyone.
+        BoxWithConstraints(
+            Modifier.fillMaxSize().clipToBounds(),
+            contentAlignment = Alignment.Center,
+        ) {
+            val boxRatio = maxWidth / maxHeight
+            val surfaceModifier = when {
+                scaleMode == 2 -> Modifier.fillMaxSize()
+                videoRatio <= 0f -> Modifier.fillMaxSize()
+                scaleMode == 1 -> {
+                    if (videoRatio >= boxRatio) {
+                        Modifier.fillMaxHeight().aspectRatio(videoRatio)
+                    } else {
+                        Modifier.fillMaxWidth().aspectRatio(videoRatio)
+                    }
+                }
+                else -> {
+                    if (videoRatio >= boxRatio) {
+                        Modifier.fillMaxWidth().aspectRatio(videoRatio)
+                    } else {
+                        Modifier.fillMaxHeight().aspectRatio(videoRatio)
+                    }
+                }
+            }
             AndroidView(
                 factory = { ctx -> SurfaceView(ctx).also { player.setVideoSurfaceView(it) } },
-                modifier = when {
-                    videoRatio <= 0f -> Modifier.fillMaxSize()
-                    videoRatio >= 1f -> Modifier.fillMaxWidth().aspectRatio(videoRatio)
-                    else -> Modifier.fillMaxHeight().aspectRatio(videoRatio)
-                },
+                modifier = surfaceModifier,
             )
         }
 
@@ -287,6 +351,59 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
             }
         }
 
+        // ---- picture-fit menu -------------------------------------------
+        if (scaleMenu && !locked) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { scaleMenu = false }
+            )
+            Column(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 84.dp, end = 62.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(alpha = 0.86f))
+                    .padding(vertical = 4.dp),
+            ) {
+                listOf(
+                    0 to "适应画面",
+                    1 to "铺满屏幕",
+                    2 to "拉伸填满",
+                ).forEach { (mode, label) ->
+                    Row(
+                        Modifier
+                            .clickable {
+                                onScaleChange(mode)
+                                scaleMenu = false
+                                controlsVisible = true
+                            }
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            label,
+                            fontSize = 12.sp,
+                            color = if (scaleMode == mode) Ink.AccentSoft else Color.White,
+                            fontWeight = if (scaleMode == mode) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        if (scaleMode == mode) {
+                            Spacer(Modifier.width(10.dp))
+                            Box(
+                                Modifier
+                                    .size(4.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Ink.Accent)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- chrome (drawn above the gesture layer) ---------------------
         AnimatedVisibility(visible = controlsVisible, enter = fadeIn(), exit = fadeOut()) {
             Box(
@@ -383,6 +500,28 @@ fun PlayerScreen(detail: Detail, source: Source, onBack: () -> Unit) {
                             )
                         }
                         Spacer(Modifier.width(10.dp))
+                        // Picture fit. The label is the current mode so the button
+                        // doubles as the indicator — a separate badge would compete
+                        // with the speed chip already in the bottom bar.
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.White.copy(alpha = 0.12f))
+                                .clickable { scaleMenu = !scaleMenu }
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                when (scaleMode) {
+                                    1 -> "铺满"
+                                    2 -> "拉伸"
+                                    else -> "适应"
+                                },
+                                fontSize = 10.5.sp,
+                                color = Color.White.copy(alpha = 0.9f),
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
                         Box(
                             Modifier
                                 .size(36.dp)

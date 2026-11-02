@@ -66,8 +66,10 @@ import kotlinx.coroutines.delay
 fun InlinePlayer(
     detail: Detail,
     source: Source,
-    onFullscreen: () -> Unit,
+    onFullscreen: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    startAt: Long = 0L,
+    onDisposePosition: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     var playing by remember { mutableStateOf(true) }
@@ -80,6 +82,11 @@ fun InlinePlayer(
     // one, which is cheaper and far less stateful than swapping a MediaItem.
     val player = remember(source.url) {
         com.hanime.app.Players.build(context, source.url, com.hanime.app.Ua.BROWSER)
+            .apply {
+                // Picked up after returning from full screen, where the same title
+                // was playing at this offset.
+                if (startAt > 0) seekTo(startAt)
+            }
     }
 
     DisposableEffect(player) {
@@ -100,6 +107,9 @@ fun InlinePlayer(
         }
         player.addListener(listener)
         onDispose {
+            // Report where we stopped before tearing the player down: the caller
+            // stores it so full screen (or a re-entered detail page) resumes here.
+            onDisposePosition(player.currentPosition.coerceAtLeast(0L))
             player.removeListener(listener)
             player.release()
         }
@@ -107,9 +117,16 @@ fun InlinePlayer(
 
     // 250 ms is fast enough for a scrub bar and far cheaper than per-frame callbacks.
     LaunchedEffect(player) {
+        var sinceSync = 0
         while (true) {
             position = player.currentPosition.coerceAtLeast(0L)
             duration = player.duration.coerceAtLeast(0L)
+            // Publish roughly once a second so full screen opens at the right frame
+            // even if the user taps the button between dispose and the next tick.
+            if (++sinceSync >= 4) {
+                sinceSync = 0
+                onDisposePosition(position)
+            }
             delay(250)
         }
     }
@@ -208,8 +225,13 @@ fun InlinePlayer(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
-                                onClick = onFullscreen,
-                            ),
+                            ) {
+                                // Freeze the playhead before the route swap tears this
+                                // player down, so full screen opens at the same frame.
+                                val ms = player.currentPosition.coerceAtLeast(0L)
+                                onDisposePosition(ms)
+                                onFullscreen(ms)
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(

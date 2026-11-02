@@ -15,12 +15,15 @@ import com.hanime.app.core.Settings
 import com.hanime.app.core.Source
 import com.hanime.app.data.userMessage
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Genres the site exposes; "全部" keeps the rich home rows instead of a flat grid. */
 val GENRES = listOf(
@@ -71,6 +74,13 @@ sealed interface Route {
     data class Player(val detail: Detail, val source: Source) : Route
     data object Search : Route
     data class Collection(val id: Long, val title: String) : Route
+    /**
+     * Vertical short-video feed over [cards], starting at [start].
+     *
+     * The queue is a snapshot taken when the feed opened: the grid underneath can
+     * refetch, but the thing the user is swiping must not change under their finger.
+     */
+    data class Reels(val cards: List<Card>, val start: Int) : Route
 }
 
 class AppViewModel : ViewModel() {
@@ -168,6 +178,19 @@ class AppViewModel : ViewModel() {
     var updateProgress by mutableStateOf(com.hanime.app.core.UpdateProgress())
         private set
 
+    // ---- reels (short-video feed) ---------------------------------------
+    /**
+     * Details fetched for the swipe feed, memoised by id.
+     *
+     * The wall page is a ~380 KB HTML fetch, so the only way a swipe can start
+     * playing immediately is to have the *next* item's sources already parsed
+     * before the user gets there. In-flight requests are shared so a prefetch and
+     * the page that just became visible don't fetch the same thing twice.
+     */
+    private val reelStore = mutableMapOf<Long, Detail>()
+    private val reelJobs = mutableMapOf<Long, kotlinx.coroutines.Deferred<Detail>>()
+    private val reelMutex = kotlinx.coroutines.sync.Mutex()
+
     // ---- detail ----------------------------------------------------------
     var detail by mutableStateOf<Detail?>(null)
         private set
@@ -178,6 +201,43 @@ class AppViewModel : ViewModel() {
     /** Source picked for the inline player; null until the user taps a quality. */
     var inlineSource by mutableStateOf<Source?>(null)
         private set
+
+    /**
+     * Where the current title was last playing, in ms.
+     *
+     * Inline and full-screen are two different ExoPlayer instances over the same
+     * URL, so without this the full-screen route started from zero and coming back
+     * from it restarted the inline one from zero too. Handing the position across
+     * is what makes the two feel like one player.
+     */
+    var resumePosition by mutableStateOf(0L)
+        private set
+    /** Which title [resumePosition] belongs to, so a new title starts at 0. */
+    private var resumeFor: Long = 0
+
+    /** Remembered playback position for [id], or 0 when it is a different title. */
+    fun positionFor(id: Long): Long = if (resumeFor == id) resumePosition else 0L
+
+    /** Records the playhead; called on every surface change and on dispose. */
+    fun rememberPosition(id: Long, ms: Long) {
+        resumeFor = id
+        resumePosition = ms.coerceAtLeast(0L)
+    }
+
+    /**
+     * Video-fit preference for full screen.
+     *
+     * 0 = fit (whole frame visible, letterboxed), 1 = fill (crop the overflowing
+     * edge), 2 = stretch (squash to the screen). Fill is what most people mean by
+     * "make it bigger", but the default stays fit because cropping a subtitled
+     * frame is how the bottom line of text gets cut off.
+     */
+    var videoScale by mutableStateOf(0)
+        private set
+
+    fun chooseVideoScale(mode: Int) {
+        videoScale = mode.coerceIn(0, 2)
+    }
 
     /**
      * Route to return to when the detail sheet is closed. Titles are opened from
@@ -201,6 +261,48 @@ class AppViewModel : ViewModel() {
 
     fun selectTab(index: Int) {
         tab = index
+    }
+
+    // ---- reels -----------------------------------------------------------
+
+    /**
+     * Resolves a title for the swipe feed, sharing one request per id.
+     *
+     * Callers await this; [prefetchReels] warms the same cache ahead of time so the
+     * await usually returns instantly.
+     */
+    suspend fun reelDetail(id: Long): Detail {
+        reelStore[id]?.let { return it }
+        val job = reelMutex.withLock {
+            reelJobs.getOrPut(id) { viewModelScope.async { repo.detail(id) } }
+        }
+        val d = job.await()
+        reelStore[id] = d
+        return d
+    }
+
+    /**
+     * Warms the cache for the pages likely to be swiped to next.
+     *
+     * Only a couple ahead: each miss costs a full page download plus parse, and
+     * fetching the whole queue would compete with the video that is playing now.
+     */
+    fun prefetchReels(ids: List<Long>) {
+        ids.forEach { id ->
+            if (reelStore.containsKey(id)) return@forEach
+            viewModelScope.launch {
+                runCatching { reelDetail(id) }
+            }
+        }
+    }
+
+    fun openReels(cards: List<Card>, start: Int) {
+        if (cards.isEmpty()) return
+        route = Route.Reels(cards, start.coerceIn(0, cards.lastIndex))
+    }
+
+    fun closeReels() {
+        if (route is Route.Reels) route = Route.Tabs
     }
 
     /**
@@ -465,11 +567,20 @@ class AppViewModel : ViewModel() {
     }
 
     /** Opens the same title full screen, keeping the already chosen quality. */
-    fun playFullscreen(source: Source? = null) {
+    fun playFullscreen(source: Source? = null, positionMs: Long = 0L) {
         val d = detail ?: return
         val src = source ?: inlineSource ?: d.sources.maxByOrNull { it.quality } ?: return
+        // Carry the playhead across: the full-screen route builds its own player,
+        // and without this it would restart the video from the beginning.
+        rememberPosition(d.id, positionMs)
         route = Route.Player(d, src)
         viewModelScope.launch { repo.markWatched(d.id) }
+    }
+
+    /** Leaves full screen, keeping the playhead so the inline player resumes there. */
+    fun leaveFullscreen(detailId: Long, positionMs: Long) {
+        rememberPosition(detailId, positionMs)
+        route = Route.Info(detailId, null)
     }
 
     /**
@@ -484,6 +595,7 @@ class AppViewModel : ViewModel() {
             is Route.Collection -> Route.Info(r.id, null)
             is Route.Info -> detailOrigin
             is Route.Search -> Route.Tabs
+            is Route.Reels -> Route.Tabs
             Route.Tabs -> Route.Tabs
         }
     }

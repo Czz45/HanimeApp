@@ -113,7 +113,13 @@ private fun Root(vm: AppViewModel = viewModel()) {
             is Route.Player -> PlayerScreen(
                 detail = r.detail,
                 source = r.source,
-                onBack = { vm.back() },
+                // Backing out has to carry the playhead to the detail sheet, which
+                // rebuilds its own player; without it the video restarted at zero.
+                onBack = { vm.leaveFullscreen(r.detail.id, vm.resumePosition) },
+                startAt = vm.positionFor(r.detail.id),
+                scaleMode = vm.videoScale,
+                onScaleChange = { vm.chooseVideoScale(it) },
+                onPositionChange = { ms -> vm.rememberPosition(r.detail.id, ms) },
             )
 
             else -> {
@@ -188,7 +194,7 @@ private fun Root(vm: AppViewModel = viewModel()) {
                             onBack = { vm.closeOverlay() },
                             onOpenRelated = { c -> vm.openDetail(c.id, c) },
                             onOpenCollection = { id, title -> vm.openCollection(id, title) },
-                            onFullscreen = { s -> vm.playFullscreen(s) },
+                            onFullscreen = { s, pos -> vm.playFullscreen(s, pos) },
                         )
                     }
                 }
