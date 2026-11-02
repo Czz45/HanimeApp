@@ -449,24 +449,31 @@ static MAX_SEEN: OnceLock<Mutex<i64>> = OnceLock::new();
 /// | ids             | owner / state                                      |
 /// |-----------------|----------------------------------------------------|
 /// | 1–9             | javchu (302 to the other catalogue)                 |
-/// | 10–98           | hanime1, old uploads                                |
-/// | 99–122          | javchu                                              |
-/// | 123–166774      | both, interleaved — see the block list below        |
-/// | 166775–401053   | **empty** — every sample 403, never in any listing  |
-/// | 401054–408975   | both, interleaved; last live id is 408975           |
-/// | ≥408976         | 403; above the newest upload                        |
+/// | 10–98           | hanime1                                            |
+/// | 99–122          | javchu                                             |
+/// | 123–166774      | both, interleaved in runs of a few thousand         |
+/// | 166775–401053   | **empty** — 150 random samples, all 403, and javchu
+/// |                 | 403s there too; never appears in any listing        |
+/// | 401054–408977   | both, interleaved; 408977 is the newest id          |
+/// | ≥408978         | 403; above the newest upload                        |
 ///
-/// Within 123–166774 the two catalogues alternate in runs of a few thousand:
-/// 22.5k–25k H, 40.5k–48k J, 52.5k–55k J, **65k–95k J**, 97.5k–105k H,
-/// 117.5k–140k J, then a fine-grained mix of H and J up to 166.6k. The second
-/// block behaves the same way (401k–402.6k J, ~402.9k H, 403.1k–404.1k J,
-/// 404.35k–408.96k H). `H` = hanime1, `J` = javchu.
+/// Within 123–166774: 22.5k–25k H, 40.5k–48k J, 52.5k–55k J, **65k–95k J**,
+/// 97.5k–105k H, 117.5k–140k J, then a fine-grained mix of H and J up to
+/// 166.6k. The second block behaves the same way (401k–402.6k J, ~402.9k H,
+/// 403.1k–404.1k J, a tight H/J braid across 404.4k–404.5k, then
+/// 404.53k–408.97k H). `H` = hanime1, `J` = javchu.
 ///
-/// That interleaving is the giveaway: each site 302s to the other for ids it
-/// does not own, in both directions, so this is one shared integer sequence
-/// split between two catalogues rather than two independent ranges. It also
-/// explains why ids do not sort by date — 401054 (2021-10-09) sits above
-/// 166774 (2024-08-18) because the two sites keep appending independently.
+/// Each site 302s to the other for ids it does not own, in both directions, so
+/// this is one shared integer sequence split between two catalogues rather than
+/// two independent ranges.
+///
+/// Ids do **not** sort by time, and the date printed next to the view counter
+/// is the *release* date of the work, not when it was uploaded here — a 1990 OVA
+/// can sit at id 24885 while a 2026 clip sits at id 300. So per-id dates say
+/// nothing about the ordering of the id space; only the `最新上傳` listing does,
+/// and that one interleaves ids wildly across pages. The gap is therefore not a
+/// jump caused by a collision: both catalogues were simply still far short of
+/// 401k when the low block stopped at 166774.
 ///
 /// 403 is the site's answer for "this id has no upload" — impossible ids like
 /// 999999999 return it too, and it does not change when the client's egress IP
