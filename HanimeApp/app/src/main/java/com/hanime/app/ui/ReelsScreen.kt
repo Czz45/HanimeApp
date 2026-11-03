@@ -1,5 +1,7 @@
 package com.hanime.app.ui
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.view.SurfaceView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -33,6 +35,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Shuffle
@@ -54,6 +58,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,6 +66,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.exoplayer.ExoPlayer
 import com.hanime.app.core.Card
 import com.hanime.app.core.Detail
@@ -89,6 +97,49 @@ fun ReelsScreen(
     onBack: () -> Unit,
 ) {
     val cards = vm.reelCards
+    val ctx = LocalContext.current
+    val activity = remember(ctx) { ctx.findActivity() }
+    // Captured once: whatever the app's normal orientation policy is, this is what
+    // the feed restores on exit. The full-screen player used to leave the whole app
+    // in landscape after being abandoned mid-rotation.
+    val restoreOrientation = remember {
+        activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    val insets = WindowInsets.systemBars
+
+    // Immersive mode: landscape + system bars hidden, the way a vertical video feed
+    // is expected to fill the device. Both effects are undone in onDispose so the
+    // tab bar comes back untouched no matter which path left the feed.
+    LaunchedEffect(vm.reelFullscreen) {
+        activity?.requestedOrientation = if (vm.reelFullscreen) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            restoreOrientation
+        }
+    }
+    val view = LocalView.current
+    DisposableEffect(vm.reelFullscreen) {
+        val window = (view.context as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (vm.reelFullscreen) {
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+        }
+        onDispose {
+            // Always restore: this composable can be disposed by a detail sheet or a
+            // route change, not only by the explicit exit button.
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            activity?.requestedOrientation = restoreOrientation
+        }
+    }
+    // Immersive means no bars, so the floating chrome must not reserve inset space
+    // for them; otherwise the back button floats a hundred pixels below the edge.
+    val chromeInsets = if (vm.reelFullscreen) WindowInsets(0, 0, 0, 0) else insets
     // Resume where the user left off: a detail sheet tears this screen down, and
     // the VM holds the page so coming back does not restart at clip one.
     val pager = rememberPagerState(
@@ -151,6 +202,7 @@ fun ReelsScreen(
                 muted = muted,
                 onToggleMute = { muted = !muted },
                 onOpen = { onOpen(card) },
+                insets = chromeInsets,
             )
         }
 
@@ -159,7 +211,7 @@ fun ReelsScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .windowInsetsPadding(chromeInsets)
                 .padding(start = 12.dp, end = 16.dp, top = 6.dp),
         ) {
             Box(
@@ -218,6 +270,24 @@ fun ReelsScreen(
                 fontSize = 11.sp,
                 color = Color.White.copy(alpha = 0.7f),
             )
+            Spacer(Modifier.width(8.dp))
+            // Full screen last, mirroring the video player's top bar: it is the
+            // outermost action on this screen too.
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.42f))
+                    .clickable { vm.toggleReelFullscreen() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (vm.reelFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                    contentDescription = if (vm.reelFullscreen) "退出全屏" else "全屏",
+                    tint = if (vm.reelFullscreen) Ink.Accent else Color.White.copy(alpha = 0.85f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
 
         // Genre selector along the top. The feed reloads in place and the pager
@@ -226,7 +296,7 @@ fun ReelsScreen(
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .windowInsetsPadding(chromeInsets)
                 .padding(top = 50.dp),
         ) {
             LazyRow(
@@ -276,6 +346,8 @@ private fun ReelPage(
     muted: Boolean,
     onToggleMute: () -> Unit,
     onOpen: () -> Unit,
+    /** Empty in immersive mode so the caption sits against the real screen edge. */
+    insets: WindowInsets,
 ) {
     var detail by remember(card.id) { mutableStateOf<Detail?>(null) }
     var failed by remember(card.id) { mutableStateOf(false) }
@@ -397,7 +469,7 @@ private fun ReelPage(
             Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.systemBars)
+                .windowInsetsPadding(insets)
                 .padding(start = 16.dp, end = 78.dp, bottom = 18.dp),
         ) {
             if (controls.duration > 0) {

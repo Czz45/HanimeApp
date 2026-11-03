@@ -29,6 +29,15 @@ import kotlinx.coroutines.sync.withLock
 /** How many random picks one swipe-feed batch holds before it refetches. */
 private const val RANDOM_BATCH = 6
 
+/**
+ * Cards the sequential feed tries to add per batch.
+ *
+ * With 屏蔽已观看 on, pages can come back fully watched, so one page is not
+ * guaranteed to produce anything; this is the point where enough has been added
+ * to fill the screen plus its prefetch window and paging can stop.
+ */
+private const val REEL_SCAN_TARGET = 12
+
 /** Genres the site exposes; "全部" keeps the rich home rows instead of a flat grid. */
 val GENRES = listOf(
     "全部", "裏番", "泡麵番", "Motion Anime", "3DCG", "2.5D",
@@ -330,6 +339,9 @@ class AppViewModel : ViewModel() {
     private var reelHasNext = false
     private var reelJob: Job? = null
 
+    /** Watched cards dropped by the last scan, so an empty feed can say why. */
+    private var reelSkipped = 0
+
     /**
      * Swipe position, kept outside the composable.
      *
@@ -346,8 +358,29 @@ class AppViewModel : ViewModel() {
 
     fun openReels(genre: String = "全部") {
         reelGenre = genre
+        // A fresh entry always starts windowed: coming back from a detail page must
+        // not silently resume in landscape with the status bar hidden.
+        reelFullscreen = false
         route = Route.Reels(genre)
         loadReels(reset = true)
+    }
+
+    /**
+     * Immersive mode for the swipe feed.
+     *
+     * Kept in the VM rather than in the composable because the pager is torn down
+     * and rebuilt when a detail sheet opens; the orientation restore in
+     * [ReelsScreen]'s onDispose then has a single source of truth to consult.
+     */
+    var reelFullscreen by mutableStateOf(false)
+        private set
+
+    fun chooseReelFullscreen(on: Boolean) {
+        reelFullscreen = on
+    }
+
+    fun toggleReelFullscreen() {
+        reelFullscreen = !reelFullscreen
     }
 
     fun chooseReelRandom(on: Boolean) {
@@ -376,6 +409,10 @@ class AppViewModel : ViewModel() {
      * sessions do not start from the same title.
      */
     fun loadReels(reset: Boolean = false) {
+        // Switching genre/mode while a batch is in flight used to be swallowed by
+        // the isActive guard, leaving the new selection on an empty pager until the
+        // old request finished. A reset supersedes it.
+        if (reset) reelJob?.cancel()
         if (reelJob?.isActive == true) return
         if (!reset && !reelMayLoadMore()) return
         reelLoading = true
@@ -384,6 +421,7 @@ class AppViewModel : ViewModel() {
             reelCards.clear()
             reelPage = 0
             reelMaxPage = 1
+            reelSkipped = 0
         }
         if (reelRandom) {
             loadRandomReels()
@@ -391,31 +429,60 @@ class AppViewModel : ViewModel() {
         }
         val nextPage = reelPage + 1
         reelJob = viewModelScope.launch {
-            runCatching {
-                repo.searchFiltered(
-                    query = "",
-                    genre = reelGenre,
-                    sort = "最新上市",
-                    date = "",
-                    duration = "",
-                    tags = emptyList(),
-                    broad = false,
-                    page = nextPage,
-                )
-            }.onSuccess { lp ->
+            val hide = settings.value.hideWatched
+            val w = repo.watched.value
+            var page = nextPage
+            var scanned = 0
+            var added = 0
+            var last: String? = null
+            // A single listing page of 59 titles can be entirely watched once the
+            // user has been through the catalogue — with 屏蔽已观看 on, that used to
+            // render as an empty feed with no explanation. Walk a few pages forward
+            // instead of giving up on the first one.
+            val maxScans = if (hide) 6 else 1
+            while (scanned < maxScans) {
+                val lp = runCatching {
+                    repo.searchFiltered(
+                        query = "",
+                        genre = reelGenre,
+                        sort = "最新上市",
+                        date = "",
+                        duration = "",
+                        tags = emptyList(),
+                        broad = false,
+                        page = page,
+                    )
+                }.getOrElse {
+                    last = it.userMessage()
+                    null
+                } ?: break
+
                 reelMaxPage = lp.maxPage.coerceAtLeast(1)
-                reelPage = nextPage
-                val hide = settings.value.hideWatched
-                val w = repo.watched.value
+                reelPage = page
+                reelHasNext = lp.hasNext
+                reelSkipped += if (hide) lp.items.count { it.id in w } else 0
+
                 val batch = if (hide) lp.items.filter { it.id !in w } else lp.items
                 val seen = reelCards.mapTo(mutableSetOf()) { it.id }
                 val fresh = batch.filter { seen.add(it.id) }
-                // Shuffle only in random mode: sequential browsing should keep the
-                // upload order the list is sorted by.
-                reelCards.addAll(fresh)
-                reelHasNext = lp.hasNext
-                prefetchReels(reelCards.take(2).map { it.id })
-            }.onFailure { reelError = it.userMessage() }
+                if (fresh.isNotEmpty()) {
+                    reelCards.addAll(fresh)
+                    added += fresh.size
+                    prefetchReels(reelCards.take(2).map { it.id })
+                }
+                scanned++
+                // Enough to fill the screen and the prefetch window below it.
+                if (added >= REEL_SCAN_TARGET) break
+                if (!lp.hasNext) break
+                page++
+            }
+            if (added == 0 && reelCards.isEmpty()) {
+                reelError = when {
+                    hide && reelSkipped > 0 ->
+                        "翻了 $reelSkipped 部都是看过的，换个分类试试，或在首页关掉屏蔽已观看"
+                    else -> last ?: "这个分类暂时没有内容"
+                }
+            }
             reelLoading = false
         }
     }
@@ -427,7 +494,7 @@ class AppViewModel : ViewModel() {
      * second round trip: the parsed [Detail]s go into [reelStore] and the swiper
      * only needs the card for the caption when it is off-screen.
      */
-    private fun loadRandomReels() {
+    private fun loadRandomReels(tries: Int = 0) {
         reelJob = viewModelScope.launch {
             // One listing request gives a whole shuffled batch. Sampling bare ids in
             // a loop was the earlier approach and it made random mode feel broken:
@@ -445,9 +512,22 @@ class AppViewModel : ViewModel() {
                 (!hide || card.id !in w) && seen.add(card.id)
             }
             if (fresh.isEmpty()) {
-                // A page can come back fully watched; try again rather than stall.
-                reelLoading = false
-                loadRandomReels()
+                reelSkipped += if (hide) lp.items.count { it.id in w } else 0
+                // A batch can come back fully watched. Retry a couple of times, but
+                // bounded: the old code recursed forever, so a feed where everything
+                // had been seen hammered the site with requests and never rendered.
+                if (tries < 2) {
+                    loadRandomReels(tries + 1)
+                } else {
+                    if (reelCards.isEmpty()) {
+                        reelError = if (hide && reelSkipped > 0) {
+                            "抽到的都是看过的（$reelSkipped 部），换个分类或关掉屏蔽已观看"
+                        } else {
+                            "没抽到可播放的作品"
+                        }
+                    }
+                    reelLoading = false
+                }
                 return@launch
             }
             reelCards.addAll(fresh)
@@ -797,6 +877,10 @@ class AppViewModel : ViewModel() {
      * used to drop the user on the home feed.
      */
     fun back() {
+        // Leaving the feed is the same gesture as leaving fullscreen, but from the
+        // outside: drop immersive mode before the route changes so the tab bar is
+        // not revealed behind a still-hidden status bar.
+        if (route is Route.Reels) reelFullscreen = false
         route = when (val r = route) {
             is Route.Player -> Route.Info(r.detail.id, null)
             // A collection lives on top of the title it was opened from.
