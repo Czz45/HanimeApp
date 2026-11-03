@@ -557,12 +557,16 @@ class AppViewModel : ViewModel() {
      */
     fun isFavorite(id: Long): Boolean = repo.favorites.value.any { it.id == id }
 
-    /** Marks a swipe-feed page watched as it becomes current, like opening it would. */
+    /**
+     * Marks a feed page watched once it has actually played.
+     *
+     * Called from [ReelVideo] after a few seconds of real playback, not when the
+     * page scrolls into view: prefetched and merely-swiped-past pages must stay
+     * available. The histogram write is the same event, so its numbers describe
+     * what was watched rather than what was rendered.
+     */
     fun markReelWatched(id: Long) {
         viewModelScope.launch { repo.markWatched(id) }
-        // Same moment, same reason: one record per page the user actually landed
-        // on, so the settings histogram reflects the real feed rather than
-        // prefetched cards that were never scrolled to.
         viewModelScope.launch { repo.noteReel(id, reelGenre) }
     }
 

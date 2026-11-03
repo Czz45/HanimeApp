@@ -12,7 +12,7 @@ pub mod translate;
 pub mod jni;
 
 use model::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,52 +140,69 @@ fn watched_path() -> PathBuf {
     state_dir().join("watched.json")
 }
 
-static WATCHED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+/// Insertion-ordered list plus a hash index.
+///
+/// The list is what gets persisted and handed to Kotlin (order matters for the
+/// "recently watched" feel), the set is what every filter actually queries. The
+/// site has no cap on how many works exist, so neither do we: capping at a few
+/// thousand used to silently forget the oldest entries, which brought already
+/// watched titles back into the feed. Keeping both structures means unbounded
+/// history costs O(1) per lookup instead of a linear scan that grows forever.
+struct Watched {
+    list: Vec<i64>,
+    set: HashSet<i64>,
+}
 
-fn watched() -> &'static Mutex<Vec<i64>> {
+static WATCHED: OnceLock<Mutex<Watched>> = OnceLock::new();
+
+fn watched() -> &'static Mutex<Watched> {
     WATCHED.get_or_init(|| {
-        let v: Vec<i64> = std::fs::read_to_string(watched_path())
+        let list: Vec<i64> = std::fs::read_to_string(watched_path())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        Mutex::new(v)
+        let set = list.iter().copied().collect();
+        Mutex::new(Watched { list, set })
     })
 }
 
 pub fn mark_watched(id: i64) {
-    let mut g = watched().lock().unwrap();
-    if !g.contains(&id) {
-        g.push(id);
-        if g.len() > 5000 {
-            let drop = g.len() - 5000;
-            g.drain(0..drop);
-        }
-        let _ = std::fs::create_dir_all(state_dir());
-        let _ = std::fs::write(
-            watched_path(),
-            serde_json::to_string(&*g).unwrap_or_default(),
-        );
+    if id <= 0 {
+        return;
     }
+    let mut g = watched().lock().unwrap();
+    if !g.set.insert(id) {
+        return;
+    }
+    g.list.push(id);
+    let _ = std::fs::create_dir_all(state_dir());
+    let _ = std::fs::write(
+        watched_path(),
+        serde_json::to_string(&g.list).unwrap_or_default(),
+    );
 }
 
 pub fn is_watched(id: i64) -> bool {
-    watched().lock().unwrap().contains(&id)
+    watched().lock().unwrap().set.contains(&id)
 }
 
 pub fn watched_json() -> String {
-    serde_json::to_string(&*watched().lock().unwrap()).unwrap_or_else(|_| "[]".into())
+    serde_json::to_string(&watched().lock().unwrap().list).unwrap_or_else(|_| "[]".into())
 }
 
 pub fn set_watched_json(json: &str) {
     if let Ok(v) = serde_json::from_str::<Vec<i64>>(json) {
-        *watched().lock().unwrap() = v;
+        let set = v.iter().copied().collect();
+        *watched().lock().unwrap() = Watched { list: v, set };
         let _ = std::fs::create_dir_all(state_dir());
         let _ = std::fs::write(watched_path(), json);
     }
 }
 
 pub fn clear_watched() {
-    watched().lock().unwrap().clear();
+    let mut g = watched().lock().unwrap();
+    g.list.clear();
+    g.set.clear();
     let _ = std::fs::write(watched_path(), "[]");
 }
 
@@ -445,8 +462,8 @@ pub fn url_for_list(genre: &str, sort: &str, date: &str, duration: &str, page: u
 fn filter_watched(mut page: ListPage) -> ListPage {
     let hide = settings_cache().lock().unwrap().hide_watched;
     if hide {
-        let w = watched().lock().unwrap().clone();
-        page.items.retain(|c| !w.contains(&c.id));
+        let g = watched().lock().unwrap();
+        page.items.retain(|c| !g.set.contains(&c.id));
     }
     page
 }
@@ -456,9 +473,9 @@ pub fn fetch_home() -> Result<String, String> {
     let mut sections = html::parse_home(&html)?;
     let hide = settings_cache().lock().unwrap().hide_watched;
     if hide {
-        let w = watched().lock().unwrap().clone();
+        let g = watched().lock().unwrap();
         for s in &mut sections {
-            s.items.retain(|c| !w.contains(&c.id));
+            s.items.retain(|c| !g.set.contains(&c.id));
         }
         sections.retain(|s| !s.items.is_empty());
     }

@@ -77,6 +77,15 @@ import com.hanime.app.ui.theme.Ink
 import kotlinx.coroutines.delay
 
 /**
+ * How much of a clip has to play before the page counts as watched.
+ *
+ * The feed prefetches the two pages below the fold and composes them offscreen;
+ * marking those as watched (or marking on arrival) silently ate works the user
+ * never saw. Three seconds of playback is long enough to mean "I looked at this".
+ */
+private const val WATCH_MARK_MS = 3_000L
+
+/**
  * Short-video feed: one title per screen, swipe up for the next.
  *
  * The whole point is that the next clip is already playable when it arrives, so
@@ -157,8 +166,9 @@ fun ReelsScreen(
         val from = (pager.currentPage + 1).coerceAtMost(cards.lastIndex)
         val to = (pager.currentPage + 2).coerceAtMost(cards.lastIndex)
         if (from <= to) vm.prefetchReels((from..to).map { cards[it].id })
-        // Mark as watched on arrival, same as opening the detail page does.
-        cards.getOrNull(pager.currentPage)?.let { vm.markReelWatched(it.id) }
+        // Landing on a page is not watching it: the swipe marks nothing here, only
+        // actual playback does (see ReelVideo). Marking on arrival is what made the
+        // item you scrolled past vanish from the feed unplayed.
         if (pager.currentPage >= cards.size - 3) vm.loadReels(reset = false)
     }
 
@@ -202,6 +212,7 @@ fun ReelsScreen(
                 muted = muted,
                 onToggleMute = { muted = !muted },
                 onOpen = { onOpen(card) },
+                onWatched = { vm.markReelWatched(card.id) },
                 insets = chromeInsets,
             )
         }
@@ -329,8 +340,7 @@ fun ReelsScreen(
  * video layer, so the two communicate through this holder instead of lifting the
  * whole ExoPlayer up into the page composable.
  */
-private class ReelControls {
-    var position by mutableStateOf(0L)
+private class ReelControls {    var position by mutableStateOf(0L)
     var duration by mutableStateOf(0L)
     var playing by mutableStateOf(false)
     var seekTo: ((Long) -> Unit)? = null
@@ -346,6 +356,8 @@ private fun ReelPage(
     muted: Boolean,
     onToggleMute: () -> Unit,
     onOpen: () -> Unit,
+    /** Called once this page has genuinely played, so the feed can record it. */
+    onWatched: () -> Unit,
     /** Empty in immersive mode so the caption sits against the real screen edge. */
     insets: WindowInsets,
 ) {
@@ -385,6 +397,7 @@ private fun ReelPage(
                 active = active,
                 muted = muted,
                 controls = controls,
+                onWatched = onWatched,
             )
         }
 
@@ -678,6 +691,8 @@ private fun ReelVideo(
     active: Boolean,
     muted: Boolean,
     controls: ReelControls,
+    /** Fires once the clip has actually played, not when the page merely appeared. */
+    onWatched: () -> Unit,
 ) {
     val context = LocalContext.current
     var videoRatio by remember(source.url) { mutableStateOf(0f) }
@@ -750,6 +765,21 @@ private fun ReelVideo(
     }
 
     LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
+
+    // "Watched" means the clip actually ran for a moment, so a page that was only
+    // scrolled past (or prefetched below the fold) stays out of the history and
+    // keeps showing up. Three seconds of real playback is the threshold: shorter
+    // than that reads as a glance, not as having seen the work.
+    var marked by remember(source.url) { mutableStateOf(false) }
+    LaunchedEffect(player, active, source.url) {
+        while (!marked) {
+            if (active && player.isPlaying && player.currentPosition >= WATCH_MARK_MS) {
+                marked = true
+                onWatched()
+            }
+            delay(200)
+        }
+    }
 
     // Loop, because a feed that stops on a 90-second clip reads as broken.
     LaunchedEffect(player, active) {
