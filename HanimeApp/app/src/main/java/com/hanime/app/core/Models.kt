@@ -135,5 +135,42 @@ data class Settings(
     val seekSeconds: Int = 90,
 )
 
+/**
+ * One vertical bar of the feed sampler histogram.
+ *
+ * Buckets are hand-picked id ranges rather than equal widths: the catalogue is
+ * two dense clusters separated by ~234k unused ids, so even buckets would flatten
+ * everything interesting into one bar.
+ */
+data class ReelBucket(
+    val label: String = "",
+    val lo: Long = 0,
+    val hi: Long = 0,
+    val count: Int = 0,
+    val distinct: Int = 0,
+)
+
+/** The sampler's observed shape, rendered by the settings page chart. */
+data class ReelStats(
+    val total: Int = 0,
+    val distinct: Int = 0,
+    val minId: Long = 0,
+    val maxId: Long = 0,
+    val buckets: List<ReelBucket> = emptyList(),
+    /** id to times-shown, the flat top of the distribution. */
+    val top: List<Pair<Long, Int>> = emptyList(),
+    val genres: List<Pair<String, Int>> = emptyList(),
+) {
+    /** Highest single bucket, used to normalise the bar heights. */
+    val peak: Int get() = buckets.maxOfOrNull { it.count } ?: 0
+
+    /**
+     * Samples landing in the empty 166k–401k band. Anything above zero means the
+     * sampler produced ids outside the catalogue, which is the one failure this
+     * chart is really meant to surface.
+     */
+    val emptyBand: Int get() = buckets.firstOrNull { it.label == "空档" }?.count ?: 0
+}
+
 /** Thrown when the Rust core reports a failure instead of a payload. */
 class CoreException(message: String) : Exception(message)

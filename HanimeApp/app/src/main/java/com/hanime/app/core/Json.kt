@@ -226,6 +226,46 @@ object Json {
         )
     }.getOrElse { UpdateProgress() }
 
+    /**
+     * Sampler histogram for the settings chart. Parsed defensively: a malformed
+     * payload should leave the chart in its empty state, never crash the page.
+     */
+    fun reelStats(raw: String): ReelStats = runCatching {
+        val o = JSONObject(raw)
+        val buckets = o.optJSONArray("buckets")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { b ->
+                    ReelBucket(
+                        label = optString(b, "label"),
+                        lo = optLong(b, "lo"),
+                        hi = optLong(b, "hi"),
+                        count = b.optInt("count", 0),
+                        distinct = b.optInt("distinct", 0),
+                    )
+                }
+            }
+        }.orEmpty()
+        val top = o.optJSONArray("top")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { t -> optLong(t, "id") to t.optInt("count", 0) }
+            }
+        }.orEmpty()
+        val genres = o.optJSONArray("genres")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { g -> optString(g, "name") to g.optInt("count", 0) }
+            }
+        }.orEmpty()
+        ReelStats(
+            total = o.optInt("total", 0),
+            distinct = o.optInt("distinct", 0),
+            minId = optLong(o, "min_id"),
+            maxId = optLong(o, "max_id"),
+            buckets = buckets,
+            top = top,
+            genres = genres,
+        )
+    }.getOrElse { ReelStats() }
+
     fun settings(raw: String): Settings = runCatching {        val o = JSONObject(raw)
         Settings(
             proxy = optString(o, "proxy"),

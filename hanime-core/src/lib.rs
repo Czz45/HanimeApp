@@ -248,6 +248,149 @@ pub fn clear_favorites() {
     save_favorites(&[]);
 }
 
+// ----------------------------------------------------------- reel sampling
+
+/// Counter for every id the short-video feed has shown, keyed by id.
+///
+/// This exists so the settings page can plot the sampler's real shape instead of
+/// the user guessing whether "random" is actually mixing. It doubles as the only
+/// cheap sanity check we have: the 166k–401k band has no works at all, so any
+/// count landing in that bucket means the sampler is reaching outside the
+/// catalogue rather than picking a bad page.
+fn reel_stats_path() -> PathBuf {
+    state_dir().join("reel_stats.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+struct ReelStats {
+    /// id -> times shown. Stored as a map so a re-watch just bumps a counter.
+    counts: HashMap<i64, u32>,
+    /// genre -> times sampled, so the chart can say which feed was being played.
+    genres: HashMap<String, u32>,
+    total: u32,
+}
+
+static REEL_STATS: OnceLock<Mutex<ReelStats>> = OnceLock::new();
+
+fn reel_stats() -> &'static Mutex<ReelStats> {
+    REEL_STATS.get_or_init(|| {
+        let s: ReelStats = std::fs::read_to_string(reel_stats_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        Mutex::new(s)
+    })
+}
+
+fn save_reel_stats(s: &ReelStats) {
+    let _ = std::fs::create_dir_all(state_dir());
+    let _ = std::fs::write(reel_stats_path(), serde_json::to_string(s).unwrap_or_default());
+}
+
+/// Records one appearance of `id` in the feed.
+///
+/// Called from the UI when a page becomes current, not when it is prefetched —
+/// otherwise the chart would count cards the user never saw.
+pub fn note_reel(id: i64, genre: &str) {
+    if id <= 0 {
+        return;
+    }
+    let mut g = reel_stats().lock().unwrap();
+    *g.counts.entry(id).or_insert(0) += 1;
+    let key = if genre.is_empty() { "全部" } else { genre };
+    *g.genres.entry(key.to_string()).or_insert(0) += 1;
+    g.total += 1;
+    // The chart only needs shape, not an unbounded log; 20k distinct ids is
+    // already far more than anyone will scroll through in a session.
+    if g.counts.len() > 20_000 {
+        let mut v: Vec<(i64, u32)> = g.counts.drain().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.truncate(10_000);
+        g.counts = v.into_iter().collect();
+    }
+    save_reel_stats(&g);
+}
+
+pub fn clear_reel_stats() {
+    let mut g = reel_stats().lock().unwrap();
+    *g = ReelStats::default();
+    save_reel_stats(&g);
+}
+
+/// Fixed bucket edges over the id space.
+///
+/// Not evenly spaced on purpose: the catalogue is two dense clusters (a low band
+/// up to ~166k and a high band from ~401k) separated by a quarter-million empty
+/// ids. Equal-width buckets would put 99% of the samples in two bars and hide
+/// everything worth seeing.
+const REEL_BUCKETS: &[(i64, i64, &str)] = &[
+    (10, 999, "10"),
+    (1_000, 4_999, "1k"),
+    (5_000, 19_999, "5k"),
+    (20_000, 49_999, "20k"),
+    (50_000, 99_999, "50k"),
+    (100_000, 149_999, "100k"),
+    (150_000, 166_774, "150k"),
+    (166_775, 401_053, "空档"),
+    (401_054, 404_999, "401k"),
+    (405_000, 408_977, "405k"),
+];
+
+pub fn reel_stats_json() -> String {
+    let g = reel_stats().lock().unwrap();
+    let mut buckets = Vec::with_capacity(REEL_BUCKETS.len());
+    for (lo, hi, label) in REEL_BUCKETS {
+        let count: u32 = g
+            .counts
+            .iter()
+            .filter(|(id, _)| **id >= *lo && **id <= *hi)
+            .map(|(_, c)| *c)
+            .sum();
+        let distinct = g
+            .counts
+            .keys()
+            .filter(|id| **id >= *lo && **id <= *hi)
+            .count();
+        buckets.push(serde_json::json!({
+            "label": label,
+            "lo": lo,
+            "hi": hi,
+            "count": count,
+            "distinct": distinct,
+        }));
+    }
+
+    let mut top: Vec<(i64, u32)> = g.counts.iter().map(|(k, v)| (*k, *v)).collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let top: Vec<_> = top
+        .into_iter()
+        .take(8)
+        .map(|(id, count)| serde_json::json!({ "id": id, "count": count }))
+        .collect();
+
+    let mut genres: Vec<(String, u32)> = g.genres.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    genres.sort_by(|a, b| b.1.cmp(&a.1));
+    let genres: Vec<_> = genres
+        .into_iter()
+        .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+        .collect();
+
+    let min_id = g.counts.keys().min().copied().unwrap_or(0);
+    let max_id = g.counts.keys().max().copied().unwrap_or(0);
+
+    serde_json::json!({
+        "total": g.total,
+        "distinct": g.counts.len(),
+        "min_id": min_id,
+        "max_id": max_id,
+        "buckets": buckets,
+        "top": top,
+        "genres": genres,
+    })
+    .to_string()
+}
+
 // ------------------------------------------------------------ library store
 
 fn library_path() -> PathBuf {

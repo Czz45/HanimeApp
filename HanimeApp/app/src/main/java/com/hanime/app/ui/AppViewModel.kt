@@ -10,6 +10,7 @@ import com.hanime.app.Graph
 import com.hanime.app.core.Card
 import com.hanime.app.core.Detail
 import com.hanime.app.core.DownloadTask
+import com.hanime.app.core.ReelStats
 import com.hanime.app.core.Section
 import com.hanime.app.core.Settings
 import com.hanime.app.core.Source
@@ -479,6 +480,33 @@ class AppViewModel : ViewModel() {
     /** Marks a swipe-feed page watched as it becomes current, like opening it would. */
     fun markReelWatched(id: Long) {
         viewModelScope.launch { repo.markWatched(id) }
+        // Same moment, same reason: one record per page the user actually landed
+        // on, so the settings histogram reflects the real feed rather than
+        // prefetched cards that were never scrolled to.
+        viewModelScope.launch { repo.noteReel(id, reelGenre) }
+    }
+
+    // ---- feed sampling telemetry ----
+
+    var reelStats by mutableStateOf(ReelStats())
+        private set
+    var reelStatsLoading by mutableStateOf(false)
+        private set
+
+    fun refreshReelStats() {
+        if (reelStatsLoading) return
+        reelStatsLoading = true
+        viewModelScope.launch {
+            reelStats = repo.reelStats()
+            reelStatsLoading = false
+        }
+    }
+
+    fun clearReelStats() {
+        viewModelScope.launch {
+            repo.clearReelStats()
+            reelStats = ReelStats()
+        }
     }
 
     /**

@@ -379,6 +379,28 @@ pub extern "system" fn Java_com_hanime_app_core_Native_clearFavorites(env: JNIEn
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_noteReel(
+    mut env: JNIEnv,
+    _class: JClass,
+    id: jni::sys::jlong,
+    genre: JString,
+) {
+    let g = from_java(&mut env, genre);
+    crate::note_reel(id, &g);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_reelStats(env: JNIEnv, _class: JClass) -> jstring {
+    to_java(&env, crate::reel_stats_json())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hanime_app_core_Native_clearReelStats(env: JNIEnv, _class: JClass) {
+    crate::clear_reel_stats();
+    let _ = env;
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_hanime_app_core_Native_getSettingsJson(env: JNIEnv, _class: JClass) -> jstring {
     to_java(&env, crate::get_settings_json())
 }

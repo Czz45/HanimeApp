@@ -9,6 +9,7 @@ import com.hanime.app.core.ListPage
 import com.hanime.app.core.Native
 import com.hanime.app.core.Playlist
 import com.hanime.app.core.Section
+import com.hanime.app.core.ReelStats
 import com.hanime.app.core.Settings
 import com.hanime.app.core.TagGroup
 import com.hanime.app.core.UpdateInfo
@@ -145,6 +146,24 @@ class Repository {
     suspend fun clearFavorites() = withContext(Dispatchers.IO) {
         Native.clearFavorites()
         _favorites.value = emptyList()
+    }
+
+    // ---- feed sampling telemetry ----
+
+    /**
+     * Records that the short-video feed showed `id`. Fire-and-forget on IO: the
+     * caller is a pager landing callback and must never wait on disk.
+     */
+    suspend fun noteReel(id: Long, genre: String) = withContext(Dispatchers.IO) {
+        Native.noteReel(id, genre)
+    }
+
+    suspend fun reelStats(): ReelStats = withContext(Dispatchers.IO) {
+        Json.reelStats(Native.reelStats())
+    }
+
+    suspend fun clearReelStats() = withContext(Dispatchers.IO) {
+        Native.clearReelStats()
     }
 
     fun refreshDownloads() {

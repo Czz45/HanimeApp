@@ -226,6 +226,10 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
+        ReelStatsGroup(vm, backdrop, settings.hideWatched)
+
+        Spacer(Modifier.height(14.dp))
+
         CacheGroup(backdrop)
 
         Spacer(Modifier.height(14.dp))
@@ -352,6 +356,56 @@ private fun UpdateGroup(vm: AppViewModel, appVersion: String, backdrop: Backdrop
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             )
         }
+    }
+}
+
+/**
+ * Sampler telemetry for the short-video feed.
+ *
+ * The point is to make "random" auditable. The site's id space is two dense
+ * clusters with a ~234k empty band between them, so a bar chart with purpose-made
+ * buckets shows at a glance whether the feed is mixing across the catalogue or
+ * stuck in one slice — and if a sample ever lands in the empty band, the caption
+ * turns pink instead of quietly looking fine.
+ *
+ * Hidden while 屏蔽已观看 is off would be wrong: the histogram is about the
+ * sampler, not about filtering. It is always available and refreshes on entry.
+ */
+@Composable
+private fun ReelStatsGroup(vm: AppViewModel, backdrop: Backdrop?, hideWatched: Boolean) {
+    LaunchedEffect(Unit) { vm.refreshReelStats() }
+    val stats = vm.reelStats
+
+    SettingsGroup("短视频抽样分布", backdrop) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            ReelStatsChart(stats)
+            if (stats.total > 0) {
+                Text(
+                    if (hideWatched)
+                        "已开启屏蔽已观看，已经看过的序号不会再出现"
+                    else
+                        "屏蔽已观看当前关闭，同一个序号可能重复出现",
+                    fontSize = 9.5.sp,
+                    lineHeight = 14.sp,
+                    color = Ink.TextTertiary,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+        }
+        Divider()
+        ActionRow(
+            title = "抽样记录",
+            subtitle = "只记录短视频里真正滑到的序号，用于上面的分布图",
+            actionLabel = if (vm.reelStatsLoading) "刷新中" else "刷新",
+            onClick = { vm.refreshReelStats() },
+        )
+        Divider()
+        ActionRow(
+            title = "清空记录",
+            subtitle = "不会删除观看历史，只清空这张图的数据",
+            actionLabel = "清空",
+            onClick = { vm.clearReelStats() },
+        )
     }
 }
 

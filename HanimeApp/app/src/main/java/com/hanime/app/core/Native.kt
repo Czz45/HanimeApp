@@ -86,4 +86,12 @@ object Native {
 
     external fun getSettingsJson(): String
     external fun setSettingsJson(json: String): String
+
+    /**
+     * Feed sampling telemetry, so the settings page can draw what the random
+     * picker actually does instead of asking the user to trust it.
+     */
+    external fun noteReel(id: Long, genre: String)
+    external fun reelStats(): String
+    external fun clearReelStats()
 }
