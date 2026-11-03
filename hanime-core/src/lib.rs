@@ -772,7 +772,13 @@ fn random_detail_of_genre(genre: &str, tries: u32) -> Result<String, String> {
 /// One page is not enough though: a page is one slice of `最新上市`, so six cards
 /// off it are six uploads from the same few days and the feed stops feeling
 /// random. Distinct pages per batch spread the draw while keeping the cost at
-/// roughly one request per three videos.
+/// roughly one request per two videos.
+///
+/// Within a page the cards are taken at strided slots rather than from the
+/// head: neighbouring cards on a listing are adjacent ids (the list is upload
+/// ordered), and pulling them in a row produced visible runs like `#408997`,
+/// `#408996`, `#408994` that read as "not random" even though the pages were
+/// rolled randomly.
 pub fn random_cards(genre: &str, count: u32) -> Result<String, String> {
     let want = genre.trim();
     let count = count.max(1);
@@ -790,7 +796,11 @@ pub fn random_cards(genre: &str, count: u32) -> Result<String, String> {
         }
     }
 
-    let per_page = 3u32;
+    // Two cards per page, taken from slots spread across it. Three per page put
+    // near-consecutive ids in one batch (#408997 / #408996 / #408994) because a
+    // page is an upload-ordered slice, and the feed immediately read as "not
+    // random" even though the pages themselves were rolled randomly.
+    let per_page = 2u32;
     let pages_needed = count.div_ceil(per_page).max(1);
     let mut items: Vec<Card> = Vec::new();
     let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
@@ -831,25 +841,41 @@ pub fn random_cards(genre: &str, count: u32) -> Result<String, String> {
             continue;
         }
         used_pages.insert(page);
+        let len = lp.items.len();
+        // Take cards from evenly spread slots across the page instead of from
+        // its shuffled prefix. A page is an upload-ordered slice, so adjacent
+        // cards are adjacent ids: pulling three in a row put #408997 / #408996 /
+        // #408994 in one batch and the feed read as "not random" even though the
+        // pages themselves were rolled randomly. Walking the page in strides
+        // keeps consecutive numbering out of a batch.
+        let want_here = (count as usize - items.len()).min(per_page as usize);
+        let stride = (len / want_here.max(1)).max(1);
+        let base = (next_rand(&mut st) % len as u64) as usize;
         let mut page_items = lp.items;
-        // Fisher-Yates over the page so a batch is not just the first N cards.
-        for i in (1..page_items.len()).rev() {
-            let j = (next_rand(&mut st) % (i as u64 + 1)) as usize;
-            page_items.swap(i, j);
-        }
-        for c in page_items {
+        for k in 0..want_here {
             if items.len() >= count as usize {
                 break;
             }
+            let idx = (base + k * stride) % page_items.len();
+            let c = page_items.remove(idx);
             note_id(c.id);
             if seen.insert(c.id) {
                 items.push(c);
+            }
+            if page_items.is_empty() {
+                break;
             }
         }
     }
 
     if items.is_empty() {
         return Err(last);
+    }
+    // Final shuffle: cards are collected two per page, so without this the feed
+    // shows them in page-sized pairs and the same page's two ids stay adjacent.
+    for i in (1..items.len()).rev() {
+        let j = (next_rand(&mut st) % (i as u64 + 1)) as usize;
+        items.swap(i, j);
     }
     let page = ListPage {
         has_next: true,
