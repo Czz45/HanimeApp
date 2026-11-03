@@ -431,8 +431,11 @@ private fun ReelPage(
                     }
                 },
         ) {
+            // Only while the chrome is hidden. With it visible the scrubber under
+            // the title already follows the drag, so the pill would duplicate the
+            // same numbers on top of the frame the user is scrubbing.
             dragTarget?.let { target ->
-                if (controls.duration > 0) {
+                if (controls.duration > 0 && !showChrome) {
                     Box(
                         Modifier
                             .align(Alignment.TopCenter)

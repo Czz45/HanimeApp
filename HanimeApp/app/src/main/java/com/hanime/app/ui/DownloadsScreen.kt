@@ -21,6 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -32,7 +34,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,19 +70,35 @@ fun DownloadsScreen(
     onOpenDetail: (Long) -> Unit,
     onOpenFavorite: (Card) -> Unit,
 ) {
-    // Two libraries share this page because they answer the same question ("what
+    // Three libraries share this page because they answer the same question ("what
     // do I already have?"): downloaded files are local, favourites are on-site but
-    // bookmarked. A segmented control beats a fourth bottom tab.
+    // bookmarked, and a collection is a finished series already filed in its own
+    // folder. A segmented control beats three more bottom tabs.
     var segment by remember { mutableStateOf(0) }
     var expandedId by remember { mutableStateOf<Long?>(null) }
     val active = downloads.filter { it.isRunning || it.isPaused }
     val done = downloads.filter { it.isDone }
     val other = downloads.filter { !it.isRunning && !it.isPaused && !it.isDone }
 
+    // Downloaded episodes of one collection are filed under a folder named after
+    // it, so the library mirrors the disk layout: the same series groups together
+    // instead of scattering through the newest-first list.
+    val collections = done
+        .filter { it.listId > 0L && it.listTitle.isNotBlank() }
+        .groupBy { it.listTitle }
+        .toSortedMap()
+
     val favorites by vm.favorites.collectAsStateWithLifecycle()
 
     Box(Modifier.fillMaxSize()) {
-        if (segment == 1) {
+        if (segment == 2) {
+            CollectionsList(
+                collections = collections,
+                topInset = topInset,
+                onPlay = onPlayLocal,
+                onOpenDetail = onOpenDetail,
+            )
+        } else if (segment == 1) {
             FavoritesList(
                 favorites = favorites,
                 topInset = topInset,
@@ -99,36 +116,41 @@ fun DownloadsScreen(
                     ActiveRow(
                         task = task,
                         onClick = { onOpenDetail(task.id) },
-                        onCancel = { vm.cancelDownload(task.id) },
+                        onCancel = { vm.abortDownload(task.id) },
                     )
                 }
             }
             if (done.isNotEmpty()) {
-                item { GroupLabel("已下载 · ${done.size}") }
-                items(done, key = { "d${it.id}" }) { task ->
-                    ListRow(
-                        card = task.asCard(),
-                        watched = false,
-                        onClick = { onPlayLocal(task) },
-                        trailing = {
-                            IconButtonSmall(
-                                icon = Icons.Rounded.DeleteOutline,
-                                contentDescription = "删除",
-                                onClick = { expandedId = if (expandedId == task.id) null else task.id },
-                            )
-                        },
-                    )
-                    if (expandedId == task.id) {
-                        ConfirmDelete(
-                            onDeleteFile = {
-                                vm.removeDownload(task.id, true)
-                                expandedId = null
-                            },
-                            onKeepFile = {
-                                vm.removeDownload(task.id, false)
-                                expandedId = null
+                // Grouped by the folder they were written to, so a downloaded
+                // series reads as a series instead of N unrelated rows.
+                val groups = done.groupBy { it.listTitle.ifBlank { "未分类" } }
+                groups.forEach { (name, tasks) ->
+                    item(key = "g$name") { GroupLabel("$name · ${tasks.size} 个文件") }
+                    items(tasks, key = { "d${it.id}" }) { task ->
+                        ListRow(
+                            card = task.asCard(),
+                            watched = false,
+                            onClick = { onPlayLocal(task) },
+                            trailing = {
+                                IconButtonSmall(
+                                    icon = Icons.Rounded.DeleteOutline,
+                                    contentDescription = "删除",
+                                    onClick = { expandedId = if (expandedId == task.id) null else task.id },
+                                )
                             },
                         )
+                        if (expandedId == task.id) {
+                            ConfirmDelete(
+                                onDeleteFile = {
+                                    vm.removeDownload(task.id, true)
+                                    expandedId = null
+                                },
+                                onKeepFile = {
+                                    vm.removeDownload(task.id, false)
+                                    expandedId = null
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -192,10 +214,19 @@ fun DownloadsScreen(
                 .padding(start = 18.dp, end = 18.dp, top = (topInset + 10).dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (segment == 0) "下载" else "收藏", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextPrimary)
+            Text(
+                when (segment) {
+                    0 -> "下载"
+                    1 -> "收藏"
+                    else -> "合集"
+                },
+                fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink.TextPrimary,
+            )
             Spacer(Modifier.weight(1f))
             Text(
-                if (segment == 0) "${done.size} 个本地文件" else "${favorites.size} 部作品",
+                if (segment == 0) "${done.size} 个本地文件"
+                else if (segment == 1) "${favorites.size} 部作品"
+                else "${collections.size} 个合集",
                 fontSize = 11.sp,
                 color = Ink.TextTertiary,
             )
@@ -208,7 +239,7 @@ fun DownloadsScreen(
                 .padding(top = (topInset + 46).dp, start = 18.dp, end = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf("下载", "收藏").forEachIndexed { index, label ->
+            listOf("下载", "收藏", "合集").forEachIndexed { index, label ->
                 SegmentTab(
                     label = label,
                     selected = segment == index,
@@ -400,5 +431,131 @@ private fun FavoritesList(
                 },
             )
         }
+    }
+}
+
+/**
+ * Downloaded series, one card per folder.
+ *
+ * A collection download writes every episode into a folder named after the
+ * collection, so the disk already has this shape — the page just shows it. Entry
+ * taps open the folder's first episode; the row underneath lists the episodes in
+ * their original order so "第 3 集" is where the user expects it, not sorted by
+ * whichever download finished last.
+ */
+@Composable
+private fun CollectionsList(
+    collections: Map<String, List<DownloadTask>>,
+    topInset: Int,
+    onPlay: (DownloadTask) -> Unit,
+    onOpenDetail: (Long) -> Unit,
+) {
+    if (collections.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("还没有合集", fontSize = 13.sp, color = Ink.TextSecondary)
+                Text(
+                    "在合集页点「全部下载」，整季会自动归到一个文件夹",
+                    fontSize = 11.5.sp,
+                    color = Ink.TextTertiary,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+        return
+    }
+    var expandedName by remember { mutableStateOf<String?>(null) }
+    LazyColumn(
+        contentPadding = PaddingValues(top = (topInset + 112).dp, bottom = 126.dp, start = 14.dp, end = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        collections.forEach { (name, tasks) ->
+            item(key = "c$name") {
+                CollectionHeader(
+                    name = name,
+                    count = tasks.size,
+                    expanded = expandedName == name,
+                    onToggle = { expandedName = if (expandedName == name) null else name },
+                    onPlay = { onPlay(tasks.first()) },
+                )
+            }
+            if (expandedName == name) {
+                items(tasks, key = { "e${it.id}" }) { task ->
+                    ListRow(
+                        card = task.asCard(),
+                        watched = false,
+                        onClick = { onPlay(task) },
+                        trailing = {
+                            IconButtonSmall(
+                                icon = Icons.Rounded.PlayArrow,
+                                contentDescription = "播放",
+                                onClick = { onPlay(task) },
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        item {
+            Text(
+                text = "每个合集是一个文件夹，展开即可按集播放",
+                fontSize = 10.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(top = 18.dp, start = 6.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CollectionHeader(
+    name: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onPlay: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Ink.SurfaceHigh)
+            .clickable(interactionSource = interaction, indication = null, onClick = onToggle)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = null,
+            tint = Ink.TextSecondary,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(
+            Modifier
+                .weight(1f)
+                .padding(start = 10.dp)
+        ) {
+            Text(
+                text = name,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Ink.TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "$count 集",
+                fontSize = 10.5.sp,
+                color = Ink.TextTertiary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        IconButtonSmall(
+            icon = Icons.Rounded.PlayArrow,
+            contentDescription = "播放第一集",
+            onClick = onPlay,
+        )
     }
 }

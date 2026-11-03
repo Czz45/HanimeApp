@@ -319,7 +319,10 @@ fun PlayerScreen(
                                 1 -> {
                                     if (duration > 0) player.seekTo(seekTo)
                                     scrubTarget = null
-                                    controlsVisible = true
+                                    // A seek must not wake the chrome: the user is
+                                    // watching the picture while scrubbing, and the
+                                    // control bar sliding in covers exactly the frame
+                                    // the swipe was aiming at.
                                 }
                                 else -> Unit
                             }
@@ -329,20 +332,25 @@ fun PlayerScreen(
         }
 
         // ---- scrubbing / level indicator -------------------------------
+        // Only when the control bar is hidden: with the bar on screen the bottom
+        // time readout already follows the drag, so a second pill at the top is
+        // duplicate information sitting on the picture.
         scrubTarget?.let { target ->
-            Box(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 84.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black.copy(alpha = 0.62f))
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    "${fmt(target)} / ${fmt(duration)}",
-                    fontSize = 12.sp,
-                    color = Color.White,
-                )
+            if (!controlsVisible) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 84.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = 0.62f))
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        "${fmt(target)} / ${fmt(duration)}",
+                        fontSize = 12.sp,
+                        color = Color.White,
+                    )
+                }
             }
         }
         hud?.let { text ->

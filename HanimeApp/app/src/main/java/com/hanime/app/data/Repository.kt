@@ -52,6 +52,10 @@ class Repository {
         Native.init(stateDir)
         _settings.value = Json.settings(Native.getSettingsJson())
         refreshDownloads()
+        // Favourites live in the core too, but unlike downloads nothing polls
+        // them: without this the 收藏 segment stayed empty on every cold start
+        // until the user toggled something.
+        reloadFavorites()
         _watched.value = runCatching {
             val arr = org.json.JSONArray(Native.watchedJson())
             (0 until arr.length()).map { arr.optLong(it, 0L) }.toSet()

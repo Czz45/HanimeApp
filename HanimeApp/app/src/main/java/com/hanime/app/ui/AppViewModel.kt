@@ -923,6 +923,21 @@ class AppViewModel : ViewModel() {
 
     fun cancelDownload(id: Long) = viewModelScope.launch { repo.cancelDownload(id) }
 
+    /**
+     * Drops a transfer and its entry in one step.
+     *
+     * Pause alone left the row sitting in the list forever — a cancelled transfer
+     * is a state nobody wants to keep, and the page had no other way to get rid
+     * of one.
+     */
+    fun abortDownload(id: Long) = viewModelScope.launch {
+        repo.cancelDownload(id)
+        // The worker only notices the flag between chunks; removing the entry
+        // immediately is what the user asked for, and a straggling write finds no
+        // task to update and is dropped.
+        repo.removeDownload(id, true)
+    }
+
     fun removeDownload(id: Long, deleteFile: Boolean) = viewModelScope.launch {
         repo.removeDownload(id, deleteFile)
     }
